@@ -7,6 +7,9 @@
   <maintainer email="1168534+minhnh@users.noreply.github.com">Minh Nguyen</maintainer>
   <license>Apache-2.0</license>
 
+  <depend>rclpy</depend>
+  <depend>bdd_ros2_interfaces</depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_mypy</test_depend>
   <test_depend>ament_pep257</test_depend>
