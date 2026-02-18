@@ -17,9 +17,9 @@ import time
 from random import random
 
 from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_AGN, URI_BHV_PRED_TARGET_OBJ
-from rdflib import Graph, URIRef
-from rdf_utils.uri import URL_SECORO_M, URL_SECORO_MM
-from coord_dsl.fsm import FSMData, fsm_step, produce_event
+from rdflib import Graph, Namespace, URIRef
+from rdf_utils.uri import URL_SECORO_M
+from coord_dsl.fsm import FSMData, consume_event, fsm_step, produce_event
 from coord_dsl.event_loop import reconfig_event_buffers
 
 import rclpy
@@ -34,10 +34,19 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
 # __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
+NS_M_TMPL = Namespace(f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/")
+NS_M_ENV_SECORO = Namespace(f"{URL_SECORO_M}/environments/secorolab/")
+NS_M_AGN_ISAAC = Namespace(f"{URL_SECORO_M}/agents/isaac-sim/")
 NS_MANAGER = Graph().namespace_manager
-NS_MANAGER.bind("mm-bhv", f"{URL_SECORO_MM}/behaviour#")
-NS_MANAGER.bind("env-secoro", f"{URL_SECORO_M}/environments/secorolab/")
-NS_MANAGER.bind("agn-isaac", f"{URL_SECORO_M}/agents/isaac-sim/")
+NS_MANAGER.bind("env-secoro", NS_M_ENV_SECORO)
+NS_MANAGER.bind("agn-isaac", NS_M_AGN_ISAAC)
+NS_MANAGER.bind("tmpl", NS_M_TMPL)
+
+
+EXPORTED_EVENTS = {
+    EventID.E_PICK_APPROACH_START: NS_M_TMPL["evt-pick-start"],
+    EventID.E_PLACE_DONE: NS_M_TMPL["evt-place-end"],
+}
 
 
 def random_in_range(lower, upper):
@@ -235,6 +244,14 @@ class MockupBhvNode(Node):
             while loop_timeout < now:
                 loop_timeout += self.loop_duration
             produce_event(pp_fsm.event_data, EventID.E_STEP)
+
+            for evt, evt_uri in EXPORTED_EVENTS.items():
+                if not consume_event(pp_fsm.event_data, evt):
+                    continue
+                evt_msg = Event()
+                evt_msg.stamp = self.get_clock().now().to_msg()
+                evt_msg.uri = evt_uri.toPython()
+                self.evt_pub.publish(evt_msg)
 
             response.result = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
