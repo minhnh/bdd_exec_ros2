@@ -21,6 +21,7 @@ from rclpy.node import Node
 from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
+from std_msgs.msg import Empty as EmptyMsg
 from rdflib import Dataset, URIRef
 from bdd_dsl.models.clauses import FluentClauseModel, WhenBehaviourModel
 from bdd_dsl.models.user_story import UserStoryLoader
@@ -120,10 +121,9 @@ def get_bhv_param_messages(
 
 class BddCoordNode(Node):
     timeout_sec: float
-    server_name: str
     graph: Dataset
     us_loader: UserStoryLoader
-    _fpolicy_cb_group: MutuallyExclusiveCallbackGroup
+    _obs_cb_group: MutuallyExclusiveCallbackGroup
     _fpolicy_by_topics: dict[str, set[URIRef]]
     _fpolicy_subs: dict[str, Subscription]
     _action_client: ActionClient
@@ -134,11 +134,12 @@ class BddCoordNode(Node):
         super().__init__(node_name)
         self._fpolicy_by_topics = {}
         self._fpolicy_subs = {}
-        self._fpolicy_cb_group = MutuallyExclusiveCallbackGroup()
+        self._obs_cb_group = MutuallyExclusiveCallbackGroup()
 
         self.timeout_sec = timeout_sec
 
         self.declare_parameter("bhv_server_name", "bhv_server")
+        self.declare_parameter("start_test_topic", "start")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
 
@@ -146,9 +147,19 @@ class BddCoordNode(Node):
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
 
         # Behaviour action server
-        self.server_name = self.get_parameter("bhv_server_name").value
-        self.get_logger().info(f"Behaviour server name: {self.server_name}")
-        self._action_client = ActionClient(self, Behaviour, self.server_name)
+        server_name = self.get_parameter("bhv_server_name").value
+        self.get_logger().info(f"Behaviour server name: {server_name}")
+        self._action_client = ActionClient(self, Behaviour, server_name)
+
+        # Test starting topic
+        start_test_topic = self.get_parameter("start_test_topic").value
+        self.get_logger().info(f"Start topic: {start_test_topic}")
+        self._start_test_sub = self.create_subscription(
+            msg_type=EmptyMsg,
+            topic=start_test_topic,
+            callback=self.start_test_cb,
+            qos_profile=10,
+        )
 
         # Topic for events
         self.event_topic = self.get_parameter("event_topic").value
@@ -163,6 +174,7 @@ class BddCoordNode(Node):
             msg_type=Event,
             topic=self.event_topic,
             callback=self.evt_sub_cb,
+            callback_group=self._obs_cb_group,
             qos_profile=10,
         )
 
@@ -171,6 +183,28 @@ class BddCoordNode(Node):
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
+
+    def start_test_cb(self, _):
+        us_var_dict = self.us_loader.get_us_scenario_variants()
+        for scr_var_set in us_var_dict.values():
+            for scr_var_id in scr_var_set:
+                scr_var = self.us_loader.load_scenario_variant(
+                    full_graph=self.graph, variant_id=scr_var_id
+                )
+                obs_manager = ObservationManager()
+                for fc in scr_var.fluent_clauses():
+                    self.load_fluent_obs(obs_manager=obs_manager, fc=fc)
+
+                var_val_dicts = get_task_var_dicts(scr_var.task_variation)
+                for val_dict in var_val_dicts:
+                    goal_msg = Behaviour.Goal()
+                    goal_msg.parameters = get_bhv_param_messages(
+                        scr_var.when_bhv_model, val_dict
+                    )
+                    send_goal_future = self._action_client.send_goal_async(
+                        goal_msg, feedback_callback=self.bhv_feedback_cb
+                    )
+                    send_goal_future.add_done_callback(callback=self.bhv_goal_resp_cb)
 
     def load_fluent_obs(self, obs_manager: ObservationManager, fc: FluentClauseModel):
         if URI_OBS_TYPE_POLICY not in fc.types:
@@ -204,7 +238,7 @@ class BddCoordNode(Node):
             callback=lambda msg: self.update_fpolicy_assertion(
                 obs_manager=obs_manager, topic_name=topic_name, msg=msg
             ),
-            callback_group=self._fpolicy_cb_group,
+            callback_group=self._obs_cb_group,
             qos_profile=10,
         )
 
@@ -220,27 +254,6 @@ class BddCoordNode(Node):
 
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
-
-        us_var_dict = self.us_loader.get_us_scenario_variants()
-        for scr_var_set in us_var_dict.values():
-            for scr_var_id in scr_var_set:
-                scr_var = self.us_loader.load_scenario_variant(
-                    full_graph=self.graph, variant_id=scr_var_id
-                )
-                obs_manager = ObservationManager()
-                for fc in scr_var.fluent_clauses():
-                    self.load_fluent_obs(obs_manager=obs_manager, fc=fc)
-
-                var_val_dicts = get_task_var_dicts(scr_var.task_variation)
-                for val_dict in var_val_dicts:
-                    goal_msg = Behaviour.Goal()
-                    goal_msg.parameters = get_bhv_param_messages(
-                        scr_var.when_bhv_model, val_dict
-                    )
-                    send_goal_future = self._action_client.send_goal_async(
-                        goal_msg, feedback_callback=self.bhv_feedback_cb
-                    )
-                    send_goal_future.add_done_callback(callback=self.bhv_goal_resp_cb)
 
     def bhv_goal_resp_cb(self, future):
         goal_handle = future.result()

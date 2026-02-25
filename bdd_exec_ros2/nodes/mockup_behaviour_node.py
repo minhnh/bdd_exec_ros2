@@ -27,12 +27,15 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse
 from rclpy.executors import ExternalShutdownException
 
-from bdd_ros2_interfaces.msg import Event, Trinary
+from bdd_ros2_interfaces.msg import Event, Trinary, TrinaryStamped
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
 
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
+TOPIC_LOCATED_PICK = "/obs_policy/located_at_pick_ws"
+TOPIC_LOCATED_PLACE = "/obs_policy/located_at_place_ws"
+
 NS_M_TMPL = Namespace(f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/")
 NS_M_ENV_SECORO = Namespace(f"{URL_SECORO_M}/environments/secorolab/")
 NS_M_AGN_ISAAC = Namespace(f"{URL_SECORO_M}/agents/isaac-sim/")
@@ -203,6 +206,13 @@ class MockupBhvNode(Node):
             msg_type=Event, topic=self.event_topic, qos_profile=10
         )
 
+        self.located_pick_pub = self.create_publisher(
+            msg_type=TrinaryStamped, topic=TOPIC_LOCATED_PICK, qos_profile=10
+        )
+        self.located_place_pub = self.create_publisher(
+            msg_type=TrinaryStamped, topic=TOPIC_LOCATED_PLACE, qos_profile=10
+        )
+
     def cancel_callback(self, goal_handle):
         self.get_logger().info("Canceling goal...")
         return CancelResponse.ACCEPT
@@ -235,6 +245,8 @@ class MockupBhvNode(Node):
         now = time.time()
         loop_timeout = now + self.loop_duration
         heartbeat_timeout = now + self.heartbeat_duration
+        trinary_msg = TrinaryStamped()
+        trinary_msg.trinary.value = Trinary.TRUE
         while True:
             # Ensure loop rate & produce step event
             now = time.time()
@@ -252,7 +264,8 @@ class MockupBhvNode(Node):
                 evt_msg.uri = evt_uri.toPython()
                 self.evt_pub.publish(evt_msg)
 
-            response.result = ud.succeeded
+            response.result.stamp = self.get_clock().now().to_msg()
+            response.result.trinary = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
                 goal_handle.succeed()
                 return response
@@ -273,6 +286,12 @@ class MockupBhvNode(Node):
                     heartbeat_timeout += self.heartbeat_duration
                 feedback.status = f"current state: {agn_str} {StateID(pp_fsm.current_state_index).name} {obj_str}"
                 goal_handle.publish_feedback(feedback)
+
+                trinary_msg.stamp = self.get_clock().now().to_msg()
+                if pp_fsm.current_state_index == StateID.S_PERCEIVE:
+                    self.located_pick_pub.publish(trinary_msg)
+                elif pp_fsm.current_state_index == StateID.S_PLACE:
+                    self.located_place_pub.publish(trinary_msg)
 
             # execute behaviour
             fsm_mockup_bhv(fsm=pp_fsm, ud=ud)
