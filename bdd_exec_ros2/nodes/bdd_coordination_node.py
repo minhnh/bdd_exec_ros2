@@ -31,8 +31,11 @@ from bdd_dsl.models.urirefs import (
     URI_BHV_TYPE_PICK,
     URI_BHV_TYPE_PLACE,
     URI_OBS_TYPE_POLICY,
+    URI_TIME_PRED_AFTER_EVT,
+    URI_TIME_PRED_BEFORE_EVT,
 )
 from bdd_dsl.models.variation import get_task_var_dicts
+from bdd_dsl.models.time_constraint import get_duration
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import Event, ParamValue, TrinaryStamped
 
@@ -123,19 +126,18 @@ class BddCoordNode(Node):
     timeout_sec: float
     graph: Dataset
     us_loader: UserStoryLoader
+    obs_manager: ObservationManager
+
     _obs_cb_group: MutuallyExclusiveCallbackGroup
     _fpolicy_by_topics: dict[str, set[URIRef]]
     _fpolicy_subs: dict[str, Subscription]
+
     _action_client: ActionClient
     _evt_pub: Publisher
     _evt_sub: Subscription
 
     def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
         super().__init__(node_name)
-        self._fpolicy_by_topics = {}
-        self._fpolicy_subs = {}
-        self._obs_cb_group = MutuallyExclusiveCallbackGroup()
-
         self.timeout_sec = timeout_sec
 
         self.declare_parameter("bhv_server_name", "bhv_server")
@@ -145,6 +147,12 @@ class BddCoordNode(Node):
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
+
+        # Observation
+        self._fpolicy_by_topics = {}
+        self._fpolicy_subs = {}
+        self._obs_cb_group = MutuallyExclusiveCallbackGroup()
+        self.obs_manager = ObservationManager()
 
         # Behaviour action server
         server_name = self.get_parameter("bhv_server_name").value
@@ -184,6 +192,19 @@ class BddCoordNode(Node):
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
+    def send_event(self, evt_uri: URIRef) -> None:
+        evt_msg = Event()
+        evt_msg.uri = evt_uri.toPython()
+        evt_msg.stamp = self.get_clock().now().to_msg()
+        self._evt_pub.publish(evt_msg)
+
+    def reset_observations(self):
+        for sub in self._fpolicy_subs.values():
+            self.destroy_subscription(sub)
+        self._fpolicy_subs.clear()
+        self._fpolicy_by_topics.clear()
+        self.obs_manager.reset()
+
     def start_test_cb(self, _):
         us_var_dict = self.us_loader.get_us_scenario_variants()
         for scr_var_set in us_var_dict.values():
@@ -191,27 +212,40 @@ class BddCoordNode(Node):
                 scr_var = self.us_loader.load_scenario_variant(
                     full_graph=self.graph, variant_id=scr_var_id
                 )
-                obs_manager = ObservationManager()
-                for fc in scr_var.fluent_clauses():
-                    self.load_fluent_obs(obs_manager=obs_manager, fc=fc)
 
                 var_val_dicts = get_task_var_dicts(scr_var.task_variation)
                 for val_dict in var_val_dicts:
+                    self.reset_observations()
+                    for fc in scr_var.fluent_clauses():
+                        self.load_fluent_obs(fc=fc)
+
                     goal_msg = Behaviour.Goal()
                     goal_msg.parameters = get_bhv_param_messages(
                         scr_var.when_bhv_model, val_dict
                     )
+
+                    dur = get_duration(scr_var.tmpl)
+                    assert (
+                        URI_TIME_PRED_AFTER_EVT in dur
+                        and URI_TIME_PRED_BEFORE_EVT in dur
+                    )
+                    self.send_event(evt_uri=dur[URI_TIME_PRED_AFTER_EVT])
+
                     send_goal_future = self._action_client.send_goal_async(
                         goal_msg, feedback_callback=self.bhv_feedback_cb
                     )
-                    send_goal_future.add_done_callback(callback=self.bhv_goal_resp_cb)
+                    send_goal_future.add_done_callback(
+                        callback=lambda future: self.bhv_goal_resp_cb(
+                            future, end_event=dur[URI_TIME_PRED_BEFORE_EVT]
+                        )
+                    )
 
-    def load_fluent_obs(self, obs_manager: ObservationManager, fc: FluentClauseModel):
+    def load_fluent_obs(self, fc: FluentClauseModel):
         if URI_OBS_TYPE_POLICY not in fc.types:
             self.get_logger().warning(f"no observation policy for fluent {fc.id}")
             return
 
-        obs_manager.load_fluent_obs(fc=fc, graph=self.graph)
+        self.obs_manager.load_fluent_obs(fc=fc, graph=self.graph)
 
         topic_name = fc.get_attr(key=URI_ROS_PRED_TOPIC_NAME)
         msg_type = fc.get_attr(key=URI_ROS_PRED_MSG_TYPE)
@@ -236,26 +270,25 @@ class BddCoordNode(Node):
             msg_type=msg_type,
             topic=topic_name,
             callback=lambda msg: self.update_fpolicy_assertion(
-                obs_manager=obs_manager, topic_name=topic_name, msg=msg
+                topic_name=topic_name, msg=msg
             ),
             callback_group=self._obs_cb_group,
             qos_profile=10,
         )
 
-    def update_fpolicy_assertion(
-        self, obs_manager: ObservationManager, topic_name: str, msg: TrinaryStamped
-    ):
+    def update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
         assert (
             topic_name in self._fpolicy_by_topics
         ), f"no policy registered for topic: {topic_name}"
         for fpolicy_uri in self._fpolicy_by_topics[topic_name]:
             self.get_logger().info(f"new assertion for {fpolicy_uri}: {msg}")
-            obs_manager.update_fpolicy_assertion(fc_uri=fpolicy_uri, trinary=msg)
+            self.obs_manager.update_fpolicy_assertion(fc_uri=fpolicy_uri, trin_msg=msg)
 
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
+        self.obs_manager.on_event(evt_msg=msg)
 
-    def bhv_goal_resp_cb(self, future):
+    def bhv_goal_resp_cb(self, future, end_event: URIRef):
         goal_handle = future.result()
 
         if not goal_handle.accepted:
@@ -266,15 +299,18 @@ class BddCoordNode(Node):
 
         self._get_result_future = goal_handle.get_result_async()
 
-        self._get_result_future.add_done_callback(self.bhv_result_cb)
+        self._get_result_future.add_done_callback(
+            lambda future: self.bhv_result_cb(future, end_event=end_event)
+        )
 
     def bhv_feedback_cb(self, feedback_msg):
         feedback = feedback_msg.feedback
         self.get_logger().info("Behaviour feedback: {0}".format(feedback.status))
 
-    def bhv_result_cb(self, future):
+    def bhv_result_cb(self, future, end_event: URIRef):
         result = future.result().result
         self.get_logger().info("Result: {0}".format(result.result))
+        self.send_event(evt_uri=end_event)
 
 
 def main(args=None):
