@@ -13,34 +13,46 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
+from uuid import UUID, uuid4
+from dataclasses import dataclass
+import threading
+
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.action.client import ClientGoalHandle
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
+from rclpy.time import Time
 from std_msgs.msg import Empty as EmptyMsg
+
 from rdflib import Dataset, URIRef
-from bdd_dsl.models.clauses import FluentClauseModel, WhenBehaviourModel
-from bdd_dsl.models.user_story import UserStoryLoader
+from rdf_utils.models.common import ModelBase
+from bdd_dsl.models.clauses import WhenBehaviourModel
+from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
 from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_AGN,
     URI_BHV_PRED_TARGET_OBJ,
     URI_BHV_TYPE_PICK,
     URI_BHV_TYPE_PLACE,
-    URI_OBS_TYPE_POLICY,
     URI_TIME_PRED_AFTER_EVT,
     URI_TIME_PRED_BEFORE_EVT,
 )
 from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_dsl.models.time_constraint import get_duration
+from bdd_dsl.models.observation import ObservationManager
+
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import Event, ParamValue, TrinaryStamped
-
-from bdd_exec_ros2.observation import ObservationManager
-from bdd_exec_ros2.urirefs import URI_ROS_PRED_MSG_TYPE, URI_ROS_PRED_TOPIC_NAME
+from bdd_exec_ros2.observation import from_trin_stamped_msg, load_ros_topic_model
+from bdd_exec_ros2.urirefs import (
+    URI_ROS_PRED_MSG_TYPE,
+    URI_ROS_PRED_TOPIC_NAME,
+    URI_ROS_TYPE_TOPIC,
+)
 
 
 __DEFAULT_NODE_NAME = "test_coordinator"
@@ -122,14 +134,29 @@ def get_bhv_param_messages(
     return param_vals
 
 
+@dataclass
+class ScenarioContext:
+    """Context for tracking scenario execution"""
+
+    context_id: UUID
+    obs_manager: ObservationManager
+    start_event: URIRef
+    end_event: URIRef
+    variation_params: dict[URIRef, Any]
+    # Useful for handling timeout, cancelation
+    goal_handle: Optional[ClientGoalHandle] = None
+
+
 class BddCoordNode(Node):
     timeout_sec: float
     graph: Dataset
     us_loader: UserStoryLoader
-    obs_manager: ObservationManager
+
+    _scenario_contexts: dict[UUID, ScenarioContext]
+    _scr_lock: threading.Lock
 
     _obs_cb_group: MutuallyExclusiveCallbackGroup
-    _fpolicy_by_topics: dict[str, set[URIRef]]
+    _topic_fpolicy_reg: dict[str, dict[UUID, set[URIRef]]]
     _fpolicy_subs: dict[str, Subscription]
 
     _action_client: ActionClient
@@ -149,10 +176,9 @@ class BddCoordNode(Node):
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
 
         # Observation
-        self._fpolicy_by_topics = {}
+        self._topic_fpolicy_reg = {}
         self._fpolicy_subs = {}
         self._obs_cb_group = MutuallyExclusiveCallbackGroup()
-        self.obs_manager = ObservationManager()
 
         # Behaviour action server
         server_name = self.get_parameter("bhv_server_name").value
@@ -192,18 +218,126 @@ class BddCoordNode(Node):
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
-    def send_event(self, evt_uri: URIRef) -> None:
+        # Set up context management for executing scenario variants
+        self._scenario_contexts = {}
+        self._scr_lock = threading.Lock()
+
+    def _send_event(self, evt_uri: URIRef) -> None:
         evt_msg = Event()
         evt_msg.uri = evt_uri.toPython()
         evt_msg.stamp = self.get_clock().now().to_msg()
         self._evt_pub.publish(evt_msg)
 
-    def reset_observations(self):
-        for sub in self._fpolicy_subs.values():
-            self.destroy_subscription(sub)
-        self._fpolicy_subs.clear()
-        self._fpolicy_by_topics.clear()
-        self.obs_manager.reset()
+    def _remove_context_topic_reg(self, context_id):
+        for ctx_fc_dict in self._topic_fpolicy_reg.values():
+            if context_id not in ctx_fc_dict:
+                continue
+            del ctx_fc_dict[context_id]
+
+    def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
+        assert (
+            topic_name in self._topic_fpolicy_reg
+        ), f"no policy registered for topic: {topic_name}"
+
+        trin_st = from_trin_stamped_msg(msg)
+
+        with self._scr_lock:
+            for context_id in self._topic_fpolicy_reg[topic_name]:
+                if context_id not in self._scenario_contexts:
+                    self.get_logger().warning(
+                        f"skipping trinary update for orphan context {context_id}"
+                    )
+                    continue
+
+                for fpolicy_uri in self._topic_fpolicy_reg[topic_name][context_id]:
+                    self._scenario_contexts[
+                        context_id
+                    ].obs_manager.update_fpolicy_assertion(
+                        fc_uri=fpolicy_uri, trin_st=trin_st
+                    )
+
+    def _create_subscription(self, model: ModelBase, context_id: UUID):
+        if URI_ROS_TYPE_TOPIC not in model.types:
+            self.get_logger().warning(
+                f"create_subscription: model {model.id} does not have ROSTopic type"
+            )
+            return
+
+        topic_name = model.get_attr(key=URI_ROS_PRED_TOPIC_NAME)
+        msg_type = model.get_attr(key=URI_ROS_PRED_MSG_TYPE)
+        assert (
+            isinstance(topic_name, str) and msg_type is not None
+        ), f"invalid attrs for {model.id}: topic={topic_name}, msg_type={msg_type}"
+        assert issubclass(
+            msg_type, TrinaryStamped
+        ), "currently only support TrinaryStamped policy assertions"
+
+        if topic_name not in self._topic_fpolicy_reg:
+            self._topic_fpolicy_reg[topic_name] = {}
+        if context_id not in self._topic_fpolicy_reg[topic_name]:
+            self._topic_fpolicy_reg[topic_name][context_id] = set()
+        self._topic_fpolicy_reg[topic_name][context_id].add(model.id)
+
+        if topic_name in self._fpolicy_subs:
+            self.get_logger().info(
+                f"not creating new subscription for '{model.id}' on topic '{topic_name}'"
+            )
+            return
+
+        self._fpolicy_subs[topic_name] = self.create_subscription(
+            msg_type=msg_type,
+            topic=topic_name,
+            callback=lambda msg: self._update_fpolicy_assertion(
+                topic_name=topic_name, msg=msg
+            ),
+            callback_group=self._obs_cb_group,
+            qos_profile=10,
+        )
+
+    def _execute_scenario_variant(
+        self, scr_var: ScenarioVariantModel, val_dict: dict[URIRef, Any]
+    ):
+        scr_context_id = uuid4()
+
+        obs_manager = ObservationManager.from_scenario_variant(
+            graph=self.graph,
+            scr_var=scr_var,
+            obs_loaders=[
+                load_ros_topic_model,
+                lambda graph,
+                model,
+                cid=scr_context_id,
+                **kwargs: self._create_subscription(model=model, context_id=cid),
+            ],
+        )
+
+        dur = get_duration(scr_var.tmpl)
+        assert URI_TIME_PRED_AFTER_EVT in dur and URI_TIME_PRED_BEFORE_EVT in dur
+        context = ScenarioContext(
+            context_id=scr_context_id,
+            variation_params=val_dict,
+            start_event=dur[URI_TIME_PRED_AFTER_EVT],
+            end_event=dur[URI_TIME_PRED_BEFORE_EVT],
+            obs_manager=obs_manager,
+        )
+
+        # Publish scenario start event
+        self._send_event(evt_uri=context.start_event)
+
+        goal_msg = Behaviour.Goal()
+        goal_msg.parameters = get_bhv_param_messages(scr_var.when_bhv_model, val_dict)
+        with self._scr_lock:
+            self._scenario_contexts[context.context_id] = context
+
+        # Send goal asynchronously
+        send_goal_future = self._action_client.send_goal_async(
+            goal_msg, feedback_callback=self.bhv_feedback_cb
+        )
+        send_goal_future.add_done_callback(
+            callback=lambda future, cid=context.context_id: self.bhv_goal_resp_cb(
+                future, context_id=cid
+            )
+        )
 
     def start_test_cb(self, _):
         us_var_dict = self.us_loader.get_us_scenario_variants()
@@ -215,108 +349,66 @@ class BddCoordNode(Node):
 
                 var_val_dicts = get_task_var_dicts(scr_var.task_variation)
                 for val_dict in var_val_dicts:
-                    self.reset_observations()
-                    for fc in scr_var.fluent_clauses():
-                        self.load_fluent_obs(fc=fc)
-
-                    goal_msg = Behaviour.Goal()
-                    goal_msg.parameters = get_bhv_param_messages(
-                        scr_var.when_bhv_model, val_dict
+                    self._execute_scenario_variant(
+                        scr_var=scr_var,
+                        val_dict=val_dict,
                     )
-
-                    dur = get_duration(scr_var.tmpl)
-                    assert (
-                        URI_TIME_PRED_AFTER_EVT in dur
-                        and URI_TIME_PRED_BEFORE_EVT in dur
-                    )
-                    self.send_event(evt_uri=dur[URI_TIME_PRED_AFTER_EVT])
-
-                    send_goal_future = self._action_client.send_goal_async(
-                        goal_msg, feedback_callback=self.bhv_feedback_cb
-                    )
-                    send_goal_future.add_done_callback(
-                        callback=lambda future: self.bhv_goal_resp_cb(
-                            future, end_event=dur[URI_TIME_PRED_BEFORE_EVT]
-                        )
-                    )
-
-    def load_fluent_obs(self, fc: FluentClauseModel):
-        if URI_OBS_TYPE_POLICY not in fc.types:
-            self.get_logger().warning(f"no observation policy for fluent {fc.id}")
-            return
-
-        self.obs_manager.load_fluent_obs(fc=fc, graph=self.graph)
-
-        topic_name = fc.get_attr(key=URI_ROS_PRED_TOPIC_NAME)
-        msg_type = fc.get_attr(key=URI_ROS_PRED_MSG_TYPE)
-        assert (
-            isinstance(topic_name, str) and msg_type is not None
-        ), f"invalid attrs for {fc.id}: topic={topic_name}, msg_type={msg_type}"
-        assert issubclass(
-            msg_type, TrinaryStamped
-        ), "currently only support TrinaryStamped policy assertions"
-
-        if topic_name not in self._fpolicy_by_topics:
-            self._fpolicy_by_topics[topic_name] = set()
-        self._fpolicy_by_topics[topic_name].add(fc.id)
-
-        if topic_name in self._fpolicy_subs:
-            self.get_logger().info(
-                f"not creating new subscription for '{fc.id}' on topic '{topic_name}'"
-            )
-            return
-
-        self._fpolicy_subs[topic_name] = self.create_subscription(
-            msg_type=msg_type,
-            topic=topic_name,
-            callback=lambda msg: self.update_fpolicy_assertion(
-                topic_name=topic_name, msg=msg
-            ),
-            callback_group=self._obs_cb_group,
-            qos_profile=10,
-        )
-
-    def update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
-        assert (
-            topic_name in self._fpolicy_by_topics
-        ), f"no policy registered for topic: {topic_name}"
-        for fpolicy_uri in self._fpolicy_by_topics[topic_name]:
-            self.get_logger().info(f"new assertion for {fpolicy_uri}: {msg}")
-            self.obs_manager.update_fpolicy_assertion(fc_uri=fpolicy_uri, trin_msg=msg)
 
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
-        self.obs_manager.on_event(evt_msg=msg)
+        evt_uri = URIRef(msg.uri)
+        evt_t = Time.from_msg(msg.stamp).to_datetime().timestamp()
+        with self._scr_lock:
+            for ctx in self._scenario_contexts.values():
+                try:
+                    ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
+                except ValueError as e:
+                    self.get_logger().error(f"error on_event {ctx.context_id}:J {e}")
+                    continue
 
-    def bhv_goal_resp_cb(self, future, end_event: URIRef):
+    def bhv_goal_resp_cb(self, future, context_id: UUID):
         goal_handle = future.result()
 
+        assert context_id in self._scenario_contexts, "context ID not found"
+        ctx = self._scenario_contexts[context_id]
+
         if not goal_handle.accepted:
-            self.get_logger().info("Goal rejected :(")
+            self.get_logger().error(f"Goal rejected for {context_id}, removing context")
+            with self._scr_lock:
+                self._send_event(evt_uri=ctx.end_event)
+                del self._scenario_contexts[context_id]
+                self._remove_context_topic_reg(context_id=context_id)
             return
 
-        self.get_logger().info("Goal accepted :)")
+        self.get_logger().info(f"Goal accepted for {context_id}")
+        with self._scr_lock:
+            ctx.goal_handle = goal_handle
 
         self._get_result_future = goal_handle.get_result_async()
-
         self._get_result_future.add_done_callback(
-            lambda future: self.bhv_result_cb(future, end_event=end_event)
+            lambda future, cid=context_id: self.bhv_result_cb(future, context_id=cid)
         )
 
     def bhv_feedback_cb(self, feedback_msg):
         feedback = feedback_msg.feedback
-        self.get_logger().info("Behaviour feedback: {0}".format(feedback.status))
+        self.get_logger().info(f"Behaviour feedback: {feedback.status}")
 
-    def bhv_result_cb(self, future, end_event: URIRef):
+    def bhv_result_cb(self, future, context_id: UUID):
         result = future.result().result
-        self.get_logger().info("Result: {0}".format(result.result))
-        self.send_event(evt_uri=end_event)
+        self.get_logger().info(f"Result {context_id}: {result.result}")
+
+        with self._scr_lock:
+            if context_id not in self._scenario_contexts:
+                self.get_logger().error(
+                    f"Result callback: context {context_id} not found"
+                )
+                return
+            ctx = self._scenario_contexts.pop(context_id)
+            self._remove_context_topic_reg(context_id=context_id)
+            self._send_event(evt_uri=ctx.end_event)
 
 
 def main(args=None):
-    import rdf_utils
-
-    print(rdf_utils.__path__)
     if args is None:
         node_name = __DEFAULT_NODE_NAME
     else:
