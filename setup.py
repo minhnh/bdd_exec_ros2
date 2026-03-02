@@ -8,7 +8,6 @@ setup(
     name=package_name,
     version="0.0.0",
     packages=find_packages(exclude=["test"]),
-    package_dir={"": "src"},
     data_files=[
         (
             os_join("share", "ament_index", "resource_index", "packages"),
@@ -20,7 +19,7 @@ setup(
         (os_join("share", package_name, "models"), glob(os_join("models", "*"))),
     ],
     package_data={"": ["py.typed"]},
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "pyside6"],
     zip_safe=True,
     maintainer="Minh Nguyen",
     maintainer_email="1168534+minhnh@users.noreply.github.com",
@@ -33,8 +32,9 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "bdd_coordination_node = bdd_exec_ros2.nodes.bdd_coordination_node:main",
-            "mockup_behaviour_node = bdd_exec_ros2.nodes.mockup_behaviour_node:main",
+            "bdd_coordination_node = bdd_exec_ros2.executables.bdd_coordination_node:main",
+            "mockup_behaviour_node = bdd_exec_ros2.executables.mockup_behaviour_node:main",
+            "visualizer = bdd_exec_ros2.executables.visualizer:main",
         ],
     },
 )

@@ -21,6 +21,7 @@ from rdflib import URIRef
 
 from rclpy.time import Time
 from unique_identifier_msgs.msg import UUID as UUIDMsg
+from builtin_interfaces.msg import Time as TimeMsg
 
 from bdd_dsl.models.observation import (
     ObservationManager,
@@ -35,6 +36,10 @@ from bdd_ros2_interfaces.msg import (
     TrinaryStamped as TrinaryStampedMsg,
     Trinary as TrinaryMsg,
 )
+
+
+def format_time_msg(msg: TimeMsg) -> str:
+    return Time.from_msg(msg).to_datetime().strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 def to_uuid_msg(uuid: UUID) -> UUIDMsg:
@@ -120,6 +125,7 @@ def to_scenario_status_msg(
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()
+        fl_status.representation = fl_tl.representation
         fl_status.trinaries = [
             to_trin_stamped_msg(trin_st) for trin_st in fl_tl.trinary_timeline
         ]

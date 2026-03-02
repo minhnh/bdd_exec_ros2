@@ -353,6 +353,7 @@ class BddCoordNode(Node):
 
         now = self.get_clock().now()
         status_msg = ScenarioStatusList()
+        status_msg.stamp = now.to_msg()
         status_msg.scenarios = []
 
         for ctx_id, scr_ctx in self._scenario_contexts.items():
