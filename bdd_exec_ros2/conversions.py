@@ -23,7 +23,7 @@ from rclpy.time import Time
 from unique_identifier_msgs.msg import UUID as UUIDMsg
 
 from bdd_dsl.models.observation import (
-    FluentTimeline,
+    ObservationManager,
     TrinariesPolicyProtocol,
     TrinaryStamped,
 )
@@ -31,6 +31,7 @@ from bdd_dsl.models.observation import (
 from bdd_ros2_interfaces.msg import (
     FluentStatus,
     ParamValue,
+    ScenarioStatus,
     TrinaryStamped as TrinaryStampedMsg,
     Trinary as TrinaryMsg,
 )
@@ -100,14 +101,33 @@ def to_paramval_message(rel_uri: URIRef, val: Any) -> ParamValue:
     )
 
 
-def to_fluent_status_msg(
-    fluent_tl: FluentTimeline, now: Time, trinaries_policy: TrinariesPolicyProtocol
-) -> FluentStatus:
-    fl_status = FluentStatus()
-    fl_status.trinaries = [
-        to_trin_stamped_msg(trin_st) for trin_st in fluent_tl.trinary_timeline
-    ]
+def to_scenario_status_msg(
+    ctx_id: UUID,
+    obs_manager: ObservationManager,
+    now: Time,
+    trinaries_policy: TrinariesPolicyProtocol,
+) -> ScenarioStatus:
+    scr_status = ScenarioStatus()
+    scr_status.context_id = to_uuid_msg(ctx_id)
+    now_msg = now.to_msg()
+    scr_status.fluents = []
+    fluent_results = []
+    for fl_tl in obs_manager.fluent_timelines.values():
+        fl_res = TrinaryStamped(
+            stamp=now.to_datetime().timestamp(),
+            trinary=trinaries_policy(fl_tl.trinary_timeline),
+        )
+        fluent_results.append(fl_res)
 
-    fl_status.result.stamp = now.to_msg()
-    fl_status.result.trinary = to_trin_msg(trinaries_policy(fluent_tl.trinary_timeline))
-    return fl_status
+        fl_status = FluentStatus()
+        fl_status.trinaries = [
+            to_trin_stamped_msg(trin_st) for trin_st in fl_tl.trinary_timeline
+        ]
+
+        fl_status.result = to_trin_stamped_msg(fl_res)
+
+        scr_status.fluents.append(fl_status)
+
+    scr_status.result.stamp = now_msg
+    scr_status.result.trinary = to_trin_msg(trinaries_policy(fluent_results))
+    return scr_status

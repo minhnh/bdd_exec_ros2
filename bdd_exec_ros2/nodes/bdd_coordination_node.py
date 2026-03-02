@@ -49,15 +49,13 @@ from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
     Event,
     ParamValue,
-    ScenarioStatus,
     ScenarioStatusList,
     TrinaryStamped,
 )
 from bdd_exec_ros2.conversions import (
     from_trin_stamped_msg,
-    to_fluent_status_msg,
     to_paramval_message,
-    to_uuid_msg,
+    to_scenario_status_msg,
 )
 from bdd_exec_ros2.observation import load_ros_topic_model
 from bdd_exec_ros2.urirefs import (
@@ -358,15 +356,12 @@ class BddCoordNode(Node):
         status_msg.scenarios = []
 
         for ctx_id, scr_ctx in self._scenario_contexts.items():
-            scr_status = ScenarioStatus()
-            scr_status.context_id = to_uuid_msg(ctx_id)
-            scr_status.fluents = []
-            for fl_tl in scr_ctx.obs_manager.fluent_timelines.values():
-                scr_status.fluents.append(
-                    to_fluent_status_msg(
-                        fluent_tl=fl_tl, now=now, trinaries_policy=trin_policy_and
-                    )
-                )
+            scr_status = to_scenario_status_msg(
+                ctx_id=ctx_id,
+                obs_manager=scr_ctx.obs_manager,
+                now=now,
+                trinaries_policy=trin_policy_and,
+            )
             status_msg.scenarios.append(scr_status)
 
         self._scr_status_pub.publish(status_msg)
