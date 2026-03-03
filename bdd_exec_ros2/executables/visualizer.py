@@ -17,6 +17,7 @@ import sys
 import signal
 import argparse
 import uuid
+from enum import Enum, auto
 
 from PySide6.QtCore import QThread, Signal, Slot
 from PySide6.QtGui import QBrush, QColor
@@ -32,10 +33,133 @@ from PySide6.QtWidgets import (
 )
 
 import rclpy
+from rclpy.time import Time
 
-from bdd_ros2_interfaces.msg import ScenarioStatusList, Trinary as TrinaryMsg
-
+from bdd_ros2_interfaces.msg import (
+    FluentStatus,
+    ScenarioStatus,
+    ScenarioStatusList,
+    Trinary as TrinaryMsg,
+    TrinaryStamped,
+)
 from bdd_exec_ros2.conversions import format_time_msg, from_uuid_msg
+
+
+class ColumnIdx(Enum):
+    SCENARIO_FLUENT = 0
+    RESULT = auto()
+    RESULT_TIME = auto()
+    START_TIME = auto()
+    END_TIME = auto()
+    DETAILS = auto()
+
+
+COLUMN_NAMES = {
+    ColumnIdx.SCENARIO_FLUENT: "Scenario/Fluent",
+    ColumnIdx.RESULT: "Result",
+    ColumnIdx.RESULT_TIME: "Result Time",
+    ColumnIdx.START_TIME: "Start Time",
+    ColumnIdx.END_TIME: "End Time",
+    ColumnIdx.DETAILS: "Oracle Details",
+}
+
+
+def get_trinary_style(value) -> tuple[str, QColor]:
+    if value == TrinaryMsg.TRUE:
+        return "TRUE", QColor("darkgreen")
+    elif value == TrinaryMsg.FALSE:
+        return "FALSE", QColor("red")
+    elif value == TrinaryMsg.UNKNOWN:
+        return "UNKNOWN", QColor("darkorange")
+    else:
+        raise ValueError(f"Invalid trinary value: {value}")
+
+
+def create_new_scr_item(parent: QTreeWidget, ctx_id: uuid.UUID) -> QTreeWidgetItem:
+    scr_item = QTreeWidgetItem(parent)
+
+    scr_item.setText(
+        ColumnIdx.SCENARIO_FLUENT.value, f"Scenario: {str(ctx_id.hex[:8])}..."
+    )
+    scr_item.setExpanded(True)
+    f = scr_item.font(ColumnIdx.SCENARIO_FLUENT.value)
+    f.setBold(True)
+    scr_item.setFont(ColumnIdx.SCENARIO_FLUENT.value, f)
+
+    return scr_item
+
+
+def update_scr_item_view(scr_item: QTreeWidgetItem, scr_status: ScenarioStatus) -> bool:
+    # result
+    txt, color = get_trinary_style(scr_status.result.trinary.value)
+    scr_item.setText(ColumnIdx.RESULT.value, txt)
+    scr_item.setForeground(ColumnIdx.RESULT.value, QBrush(color))
+    scr_item.setText(
+        ColumnIdx.RESULT_TIME.value, format_time_msg(scr_status.result.stamp)
+    )
+
+    # start/end time
+    if scr_status.start_time.sec > 0:
+        scr_item.setText(
+            ColumnIdx.START_TIME.value, format_time_msg(scr_status.start_time)
+        )
+
+    finished = False
+    if scr_status.end_time.sec > 0:
+        scr_item.setText(ColumnIdx.END_TIME.value, format_time_msg(scr_status.end_time))
+        finished = True
+
+    return finished
+
+
+def create_new_fluent_item(scr_item: QTreeWidgetItem, rep: str):
+    fl_item = QTreeWidgetItem(scr_item)
+    fl_item.setText(ColumnIdx.SCENARIO_FLUENT.value, rep)
+    return fl_item
+
+
+def update_fluent_item_view(fl_item: QTreeWidgetItem, fl_status: FluentStatus):
+    fl_item.setText(
+        ColumnIdx.DETAILS.value, f"Trinary count: {len(fl_status.trinaries)}"
+    )
+
+    # Result
+    trin_val = fl_status.result.trinary.value
+    txt, color = get_trinary_style(trin_val)
+
+    fl_item.setText(ColumnIdx.RESULT.value, txt)
+    fl_item.setForeground(ColumnIdx.RESULT.value, QBrush(color))
+    fl_item.setText(
+        ColumnIdx.RESULT_TIME.value, format_time_msg(fl_status.result.stamp)
+    )
+
+    # start/end time
+    if fl_status.start_time.sec > 0:
+        fl_item.setText(
+            ColumnIdx.START_TIME.value, format_time_msg(fl_status.start_time)
+        )
+
+    if fl_status.end_time.sec > 0:
+        fl_item.setText(ColumnIdx.END_TIME.value, format_time_msg(fl_status.end_time))
+
+
+def create_new_trin_item(
+    fl_item: QTreeWidgetItem, trin_id: int, trin_msg: TrinaryStamped
+) -> QTreeWidgetItem:
+    trin_item = QTreeWidgetItem(fl_item)
+    trin_item.setText(ColumnIdx.SCENARIO_FLUENT.value, f"Change #{trin_id}")
+
+    # Trinary value
+    h_val = trin_msg.trinary.value
+    h_txt, h_color = get_trinary_style(h_val)
+    trin_item.setText(ColumnIdx.RESULT.value, h_txt)
+    trin_item.setForeground(ColumnIdx.RESULT.value, QBrush(h_color))
+    trin_item.setText(ColumnIdx.RESULT_TIME.value, format_time_msg(trin_msg.stamp))
+
+    # Make the index label gray/subtle
+    trin_item.setForeground(ColumnIdx.SCENARIO_FLUENT.value, QBrush(QColor("gray")))
+
+    return trin_item
 
 
 class RosWorker(QThread):
@@ -92,12 +216,24 @@ class BddVisualizer(QMainWindow):
         layout.addWidget(self.lbl_status)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(
-            ["Context / Fluent", "State", "Time", "Oracle Details"]
-        )
+        self.tree.setHeaderLabels([COLUMN_NAMES[cl_idx] for cl_idx in ColumnIdx])
         header = self.tree.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(
+            ColumnIdx.SCENARIO_FLUENT.value, QHeaderView.Stretch
+        )
+        header.setSectionResizeMode(ColumnIdx.DETAILS.value, QHeaderView.Stretch)
+        header.setSectionResizeMode(
+            ColumnIdx.RESULT.value, QHeaderView.ResizeToContents
+        )
+        header.setSectionResizeMode(
+            ColumnIdx.RESULT_TIME.value, QHeaderView.ResizeToContents
+        )
+        header.setSectionResizeMode(
+            ColumnIdx.START_TIME.value, QHeaderView.ResizeToContents
+        )
+        header.setSectionResizeMode(
+            ColumnIdx.END_TIME.value, QHeaderView.ResizeToContents
+        )
         layout.addWidget(self.tree)
 
         self._scenario_items = {}
@@ -109,89 +245,61 @@ class BddVisualizer(QMainWindow):
     @Slot(object)
     def update_ui(self, msg: ScenarioStatusList):
         # Update timestamp label
-        if hasattr(msg, "header"):
-            self.lbl_status.setText(f"Last Update: {format_time_msg(msg.stamp)}")
+        self.lbl_status.setText(f"Last Update: {format_time_msg(msg.stamp)}")
 
-        active_uuids = set()
+        cleanup_set = set()
 
-        for scenario in msg.scenarios:
-            ctx_id = from_uuid_msg(scenario.context_id)
-            active_uuids.add(ctx_id)
+        for scr_status in msg.scenarios:
+            ctx_id = from_uuid_msg(scr_status.context_id)
 
             if ctx_id not in self._scenario_items:
-                scr_item = QTreeWidgetItem(self.tree)
-                scr_item.setText(0, f"Scenario: {str(ctx_id.hex[:8])}...")
-                scr_item.setExpanded(True)
-                f = scr_item.font(0)
-                f.setBold(True)
-                scr_item.setFont(0, f)
-                self._scenario_items[ctx_id] = {"item": scr_item, "children": {}}
+                scr_item = create_new_scr_item(parent=self.tree, ctx_id=ctx_id)
+                self._scenario_items[ctx_id] = {
+                    "item": scr_item,
+                    "children": {},
+                    "finished": False,
+                }
 
             scr_data = self._scenario_items[ctx_id]
             scr_item = scr_data["item"]
+            scr_finished = scr_data["finished"]
 
-            # Scenario Result
-            txt, color = self._get_trinary_style(scenario.result.trinary.value)
-            scr_item.setText(1, txt)
-            scr_item.setForeground(1, QBrush(color))
-            scr_item.setText(2, format_time_msg(scenario.result.stamp))
+            if scr_finished:
+                continue
 
-            for fluent in scenario.fluents:
-                f_name = fluent.representation
-                if f_name not in scr_data["children"]:
-                    fl_item = QTreeWidgetItem(scr_item)
-                    fl_item.setText(0, f_name)
-                    scr_data["children"][f_name] = fl_item
+            # update scenario item
+            scr_finished = update_scr_item_view(
+                scr_item=scr_item, scr_status=scr_status
+            )
+            if scr_finished:
+                self._scenario_items[ctx_id]["finished"] = True
+                cleanup_set.add(ctx_id)
 
-                fl_item = scr_data["children"][f_name]
-                trin_val = fluent.result.trinary.value
-                txt, color = self._get_trinary_style(trin_val)
+            for fl_status in scr_status.fluents:
+                f_rep = fl_status.representation
+                if f_rep not in scr_data["children"]:
+                    fl_item = create_new_fluent_item(scr_item=scr_item, rep=f_rep)
+                    scr_data["children"][f_rep] = {"item": fl_item, "children": {}}
 
-                fl_item.setText(1, txt)
-                fl_item.setForeground(1, QBrush(color))
-                fl_item.setText(2, format_time_msg(fluent.result.stamp))
+                fl_data = scr_data["children"][f_rep]
+                fl_item = fl_data["item"]
 
-                history_list = fluent.trinaries
-                current_count = len(history_list)
-                displayed_count = fl_item.childCount()
+                update_fluent_item_view(fl_item=fl_item, fl_status=fl_status)
 
-                fl_item.setText(3, f"Updates: {current_count}")
-
-                # Only append NEW items to avoid rebuilding tree every frame
-                if current_count > displayed_count:
-                    for i in range(displayed_count, current_count):
-                        hist_msg = history_list[i]
-
-                        # Create the history row
-                        h_item = QTreeWidgetItem(fl_item)
-                        h_item.setText(0, f"Change #{i + 1}")
-
-                        # Apply Color based on THIS specific history item's value
-                        h_val = hist_msg.trinary.value
-                        h_txt, h_color = self._get_trinary_style(h_val)
-                        h_item.setText(1, h_txt)
-                        h_item.setForeground(1, QBrush(h_color))
-                        h_item.setText(2, format_time_msg(hist_msg.stamp))
-
-                        # Make the index label gray/subtle
-                        h_item.setForeground(0, QBrush(QColor("gray")))
+                for trin_msg in fl_status.trinaries:
+                    trin_t = Time.from_msg(trin_msg.stamp).to_datetime().timestamp()
+                    if trin_t not in fl_data["children"]:
+                        trin_id = len(fl_data["children"]) + 1
+                        # Create new trinary entry
+                        trin_item = create_new_trin_item(
+                            fl_item=fl_item, trin_id=trin_id, trin_msg=trin_msg
+                        )
+                        fl_data["children"][trin_t] = trin_item
 
         # Cleanup
-        for old_id in list(self._scenario_items.keys()):
-            if old_id not in active_uuids:
-                item = self._scenario_items[old_id]["item"]
-                item.setForeground(0, QBrush(QColor("gray")))
-                item.setText(1, "FINISHED")
-
-    def _get_trinary_style(self, value):
-        if value == TrinaryMsg.TRUE:
-            return "TRUE", QColor("darkgreen")
-        elif value == TrinaryMsg.FALSE:
-            return "FALSE", QColor("red")
-        elif value == TrinaryMsg.UNKNOWN:
-            return "UNKNOWN", QColor("darkorange")
-        else:
-            raise ValueError(f"Invalid trinary value: {value}")
+        for ctx_id in cleanup_set:
+            item = self._scenario_items[ctx_id]["item"]
+            item.setForeground(0, QBrush(QColor("gray")))
 
 
 def main():
