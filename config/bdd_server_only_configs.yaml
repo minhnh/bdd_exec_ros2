@@ -1,0 +1,6 @@
+/bdd/test_coordinator:
+  ros__parameters:
+    event_topic: "/bdd/events"
+    bhv_server_name: "/bhv_server"
+    status_timer_period: 0.5
+    use_sim_time: False

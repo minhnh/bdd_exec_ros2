@@ -291,7 +291,7 @@ class BddCoordNode(Node):
 
         if topic_name in self._fpolicy_subs:
             self.get_logger().info(
-                f"not creating new subscription for '{model.id}' on topic '{topic_name}'"
+                f"not creating new subscription for '{model.id.n3(self.graph.namespace_manager)}' on topic '{topic_name}'"
             )
             return
 
@@ -401,7 +401,7 @@ class BddCoordNode(Node):
                 ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
                 # if finished remove from active scenarios
                 if ctx.obs_manager.scr_end_time is not None:
-                    self.get_logger().error(
+                    self.get_logger().info(
                         f"Scenario {ctx.context_id} completed, removing..."
                     )
                     del self._scenario_contexts[evt_ctx_uuid]
@@ -438,8 +438,11 @@ class BddCoordNode(Node):
 
     def bhv_result_cb(self, future, context_id: UUID):
         result = future.result().result
-        if context_id != from_uuid_msg(result.result.scenario_context_id):
-            self.get_logger().error("Result callback: context ID doesn't match")
+        result_uuid = from_uuid_msg(result.result.scenario_context_id)
+        if context_id != result_uuid:
+            self.get_logger().error(
+                "Result callback: context ID doesn't match {context_id.hex} != {result_uuid.hex}"
+            )
         self.get_logger().info(
             f"Result received for {context_id.hex}: {result.result.trinary.value}"
         )

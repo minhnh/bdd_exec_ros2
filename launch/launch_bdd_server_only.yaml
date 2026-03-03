@@ -1,0 +1,21 @@
+%YAML 1.2
+---
+launch:
+  - arg:
+      name: "ns"
+      default: "bdd"
+  - arg:
+      name: "config"
+      default: "$(find-pkg-share bdd_exec_ros2)/config/bdd_server_only_configs.yaml"
+  - arg:
+      name: "graph_models"
+      default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models.yaml"
+  - node:
+      pkg: "bdd_exec_ros2"
+      exec: "bdd_coordination_node"
+      namespace: "$(var ns)"
+      name: "test_coordinator"
+      param:
+        - from: "$(var config)"
+        - name: "graph_models"
+          value: "$(var graph_models)"
