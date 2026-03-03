@@ -156,9 +156,6 @@ def create_new_trin_item(
     trin_item.setForeground(ColumnIdx.RESULT.value, QBrush(h_color))
     trin_item.setText(ColumnIdx.RESULT_TIME.value, format_time_msg(trin_msg.stamp))
 
-    # Make the index label gray/subtle
-    trin_item.setForeground(ColumnIdx.SCENARIO_FLUENT.value, QBrush(QColor("gray")))
-
     return trin_item
 
 
@@ -286,17 +283,50 @@ class BddVisualizer(QMainWindow):
 
                 update_fluent_item_view(fl_item=fl_item, fl_status=fl_status)
 
+                active_trins = set()
                 for trin_msg in fl_status.trinaries:
                     trin_t = Time.from_msg(trin_msg.stamp).to_datetime().timestamp()
-                    if trin_t not in fl_data["children"]:
-                        trin_id = len(fl_data["children"]) + 1
-                        # Create new trinary entry
-                        trin_item = create_new_trin_item(
-                            fl_item=fl_item, trin_id=trin_id, trin_msg=trin_msg
-                        )
-                        fl_data["children"][trin_t] = trin_item
+                    active_trins.add(trin_t)
+                    if trin_t in fl_data["children"]:
+                        # assuming pass trin won't change
+                        continue
 
-        # Cleanup
+                    trin_id = len(fl_data["children"]) + 1
+                    # Create new trinary entry
+                    trin_item = create_new_trin_item(
+                        fl_item=fl_item, trin_id=trin_id, trin_msg=trin_msg
+                    )
+                    fl_data["children"][trin_t] = {
+                        "item": trin_item,
+                        "discarded": False,
+                    }
+
+                # clean up discarded trinaries
+                for trin_t, trin_data in fl_data["children"].items():
+                    if trin_t in active_trins:
+                        # still active
+                        continue
+
+                    if trin_data["discarded"]:
+                        # already handled
+                        continue
+
+                    # Make the index label gray/subtle
+                    trin_item = trin_data["item"]
+                    trin_item_text = trin_item.text(ColumnIdx.SCENARIO_FLUENT.value)
+                    trin_item.setText(
+                        ColumnIdx.SCENARIO_FLUENT.value, f"{trin_item_text} (discarded)"
+                    )
+                    trin_item.setForeground(
+                        ColumnIdx.SCENARIO_FLUENT.value, QBrush(QColor("gray"))
+                    )
+                    trin_item.setForeground(
+                        ColumnIdx.RESULT.value, QBrush(QColor("gray"))
+                    )
+
+                    trin_data["discarded"] = True
+
+        # Clean up completed scenarios
         for ctx_id in cleanup_set:
             item = self._scenario_items[ctx_id]["item"]
             item.setForeground(0, QBrush(QColor("gray")))
