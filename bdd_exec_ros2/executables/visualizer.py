@@ -120,7 +120,7 @@ class BddVisualizer(QMainWindow):
 
             if ctx_id not in self._scenario_items:
                 scr_item = QTreeWidgetItem(self.tree)
-                scr_item.setText(0, f"Scenario: {ctx_id.hex[:8]}...")
+                scr_item.setText(0, f"Scenario: {str(ctx_id.hex[:8])}...")
                 scr_item.setExpanded(True)
                 f = scr_item.font(0)
                 f.setBold(True)

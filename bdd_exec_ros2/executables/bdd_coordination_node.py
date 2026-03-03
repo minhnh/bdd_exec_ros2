@@ -54,8 +54,10 @@ from bdd_ros2_interfaces.msg import (
 )
 from bdd_exec_ros2.conversions import (
     from_trin_stamped_msg,
+    from_uuid_msg,
     to_paramval_message,
     to_scenario_status_msg,
+    to_uuid_msg,
 )
 from bdd_exec_ros2.observation import load_ros_topic_model
 from bdd_exec_ros2.urirefs import (
@@ -230,8 +232,9 @@ class BddCoordNode(Node):
         self._topic_fpolicy_reg = {}  # lock thread before modifying
         self._fpolicy_subs = {}
 
-    def _send_event(self, evt_uri: URIRef) -> None:
+    def _send_event(self, evt_uri: URIRef, ctx_id: UUID) -> None:
         evt_msg = Event()
+        evt_msg.scenario_context_id = to_uuid_msg(ctx_id)
         evt_msg.uri = evt_uri.toPython()
         evt_msg.stamp = self.get_clock().now().to_msg()
         self._evt_pub.publish(evt_msg)
@@ -247,22 +250,27 @@ class BddCoordNode(Node):
             f"no policy registered for topic: {topic_name}"
         )
 
-        trin_st = from_trin_stamped_msg(msg)
+        trin_st, ctx_uuid = from_trin_stamped_msg(msg)
 
         with self._scr_lock:
-            for context_id in self._topic_fpolicy_reg[topic_name]:
-                if context_id not in self._scenario_contexts:
-                    self.get_logger().warning(
-                        f"skipping trinary update for orphan context {context_id}"
-                    )
-                    continue
+            if ctx_uuid not in self._scenario_contexts:
+                self.get_logger().error(
+                    f"Trinary update from {topic_name}: Scenario context '{ctx_uuid.hex}' not found"
+                )
+                return
 
-                for fpolicy_uri in self._topic_fpolicy_reg[topic_name][context_id]:
-                    self._scenario_contexts[
-                        context_id
-                    ].obs_manager.update_fpolicy_assertion(
-                        fc_uri=fpolicy_uri, trin_st=trin_st
-                    )
+            if ctx_uuid not in self._topic_fpolicy_reg[topic_name]:
+                self.get_logger().error(
+                    f"Trinary update from {topic_name}: No fluent policy registered for context '{ctx_uuid.hex}'"
+                )
+                return
+
+            ctx = self._scenario_contexts[ctx_uuid]
+            policies = self._topic_fpolicy_reg[topic_name][ctx_uuid]
+            for fpolicy_uri in policies:
+                ctx.obs_manager.update_fpolicy_assertion(
+                    fc_uri=fpolicy_uri, trin_st=trin_st
+                )
 
     def _create_subscription(self, model: ModelBase, context_id: UUID):
         if URI_ROS_TYPE_TOPIC not in model.types:
@@ -329,9 +337,10 @@ class BddCoordNode(Node):
         )
 
         # Publish scenario start event
-        self._send_event(evt_uri=context.start_event)
+        self._send_event(evt_uri=context.start_event, ctx_id=scr_context_id)
 
         goal_msg = Behaviour.Goal()
+        goal_msg.scenario_context_id = to_uuid_msg(scr_context_id)
         goal_msg.parameters = get_bhv_param_messages(scr_var.when_bhv_model, val_dict)
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
@@ -386,13 +395,19 @@ class BddCoordNode(Node):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
         evt_uri = URIRef(msg.uri)
         evt_t = Time.from_msg(msg.stamp).to_datetime().timestamp()
+        evt_ctx_uuid = from_uuid_msg(msg.scenario_context_id)
         with self._scr_lock:
-            for ctx in self._scenario_contexts.values():
-                try:
-                    ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
-                except ValueError as e:
-                    self.get_logger().error(f"error on_event {ctx.context_id}:J {e}")
-                    continue
+            if evt_ctx_uuid not in self._scenario_contexts:
+                self.get_logger().error(
+                    f"Callback for event '{msg.uri}': Scenario context '{evt_ctx_uuid.hex}' not found"
+                )
+                return
+
+            ctx = self._scenario_contexts[evt_ctx_uuid]
+            try:
+                ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
+            except ValueError as e:
+                self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
 
     def bhv_goal_resp_cb(self, future, context_id: UUID):
         goal_handle = future.result()
@@ -403,7 +418,7 @@ class BddCoordNode(Node):
         if not goal_handle.accepted:
             self.get_logger().error(f"Goal rejected for {context_id}, removing context")
             with self._scr_lock:
-                self._send_event(evt_uri=ctx.end_event)
+                self._send_event(evt_uri=ctx.end_event, ctx_id=context_id)
                 del self._scenario_contexts[context_id]
                 self._remove_context_topic_reg(context_id=context_id)
             return
@@ -423,7 +438,11 @@ class BddCoordNode(Node):
 
     def bhv_result_cb(self, future, context_id: UUID):
         result = future.result().result
-        self.get_logger().info(f"Result {context_id}: {result.result}")
+        if context_id != from_uuid_msg(result.result.scenario_context_id):
+            self.get_logger().error("Result callback: context ID doesn't match")
+        self.get_logger().info(
+            f"Result received for {context_id.hex}: {result.result.trinary.value}"
+        )
 
         with self._scr_lock:
             if context_id not in self._scenario_contexts:
@@ -433,7 +452,7 @@ class BddCoordNode(Node):
                 return
             ctx = self._scenario_contexts.pop(context_id)
             self._remove_context_topic_reg(context_id=context_id)
-            self._send_event(evt_uri=ctx.end_event)
+            self._send_event(evt_uri=ctx.end_event, ctx_id=context_id)
 
 
 def main(args=None):

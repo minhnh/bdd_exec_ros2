@@ -52,7 +52,7 @@ def from_uuid_msg(uuid_msg: UUIDMsg) -> UUID:
     return UUID(bytes=bytes(uuid_msg.uuid))
 
 
-def from_trin_stamped_msg(msg: TrinaryStampedMsg) -> TrinaryStamped:
+def from_trin_stamped_msg(msg: TrinaryStampedMsg) -> tuple[TrinaryStamped, UUID]:
     epoch_t = Time.from_msg(msg.stamp).to_datetime().timestamp()
     if msg.trinary.value == TrinaryMsg.FALSE:
         trin = False
@@ -63,7 +63,9 @@ def from_trin_stamped_msg(msg: TrinaryStampedMsg) -> TrinaryStamped:
     else:
         raise ValueError(f"Invalid trinary value in ROS message: {msg.trinary.value}")
 
-    return TrinaryStamped(stamp=epoch_t, trinary=trin)
+    return TrinaryStamped(stamp=epoch_t, trinary=trin), from_uuid_msg(
+        msg.scenario_context_id
+    )
 
 
 def to_trin_msg(trin: Trinary | bool) -> TrinaryMsg:

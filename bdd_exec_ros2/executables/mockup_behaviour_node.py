@@ -34,6 +34,7 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
 TOPIC_LOCATED_PICK = "/obs_policy/located_at_pick_ws"
+TOPIC_IS_HELD = "/obs_policy/is_held"
 TOPIC_LOCATED_PLACE = "/obs_policy/located_at_place_ws"
 
 NS_M_TMPL = Namespace(f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/")
@@ -47,6 +48,8 @@ NS_MANAGER.bind("tmpl", NS_M_TMPL)
 
 EXPORTED_EVENTS = {
     EventID.E_PICK_APPROACH_START: NS_M_TMPL["evt-pick-start"],
+    EventID.E_PICK_APPROACH_DONE: NS_M_TMPL["evt-pick-end"],
+    EventID.E_PLACE_APPROACH_START: NS_M_TMPL["evt-place-start"],
     EventID.E_PLACE_DONE: NS_M_TMPL["evt-place-end"],
 }
 
@@ -209,6 +212,9 @@ class MockupBhvNode(Node):
         self.located_pick_pub = self.create_publisher(
             msg_type=TrinaryStamped, topic=TOPIC_LOCATED_PICK, qos_profile=10
         )
+        self.is_held_pub = self.create_publisher(
+            msg_type=TrinaryStamped, topic=TOPIC_IS_HELD, qos_profile=10
+        )
         self.located_place_pub = self.create_publisher(
             msg_type=TrinaryStamped, topic=TOPIC_LOCATED_PLACE, qos_profile=10
         )
@@ -218,9 +224,14 @@ class MockupBhvNode(Node):
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
-        response = Behaviour.Result()
-        feedback = Behaviour.Feedback()
         self.get_logger().info("Received goal:")
+        ctx_id = goal_handle.request.scenario_context_id
+
+        response = Behaviour.Result()
+        response.result.scenario_context_id = ctx_id
+        feedback = Behaviour.Feedback()
+        feedback.scenario_context_id = ctx_id
+
         agn_str = None
         obj_str = None
         for param_val in goal_handle.request.parameters:
@@ -246,6 +257,7 @@ class MockupBhvNode(Node):
         loop_timeout = now + self.loop_duration
         heartbeat_timeout = now + self.heartbeat_duration
         trinary_msg = TrinaryStamped()
+        trinary_msg.scenario_context_id = ctx_id
         trinary_msg.trinary.value = Trinary.TRUE
         while True:
             # Ensure loop rate & produce step event
@@ -260,6 +272,7 @@ class MockupBhvNode(Node):
                 if not consume_event(pp_fsm.event_data, evt):
                     continue
                 evt_msg = Event()
+                evt_msg.scenario_context_id = ctx_id
                 evt_msg.stamp = self.get_clock().now().to_msg()
                 evt_msg.uri = evt_uri.toPython()
                 self.evt_pub.publish(evt_msg)
@@ -292,6 +305,9 @@ class MockupBhvNode(Node):
                     self.located_pick_pub.publish(trinary_msg)
                 elif pp_fsm.current_state_index == StateID.S_PLACE:
                     self.located_place_pub.publish(trinary_msg)
+                elif pp_fsm.current_state_index == StateID.S_APPROACH:
+                    if ud.placing:
+                        self.is_held_pub.publish(trinary_msg)
 
             # execute behaviour
             fsm_mockup_bhv(fsm=pp_fsm, ud=ud)
