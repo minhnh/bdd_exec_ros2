@@ -401,6 +401,9 @@ def main():
     )
     parser.add_argument("--width", type=int, default=1000, help="Window width")
     parser.add_argument("--height", type=int, default=600, help="Window height")
+    parser.add_argument(
+        "--font-size", type=int, default=10, help="Font size for the UI"
+    )
 
     # Parse Known Args
     # We use parse_known_args() so that if the user passes ROS flags (like --ros-args),
@@ -412,6 +415,13 @@ def main():
 
     # Launch App
     app = QApplication(sys.argv)
+
+    # Set font size
+    font = app.font()
+    font.setPointSize(args.font_size)
+    app.setFont(font)
+
+    # Create dashboard
     window = BddVisualizer(
         status_topic=args.topic, width=args.width, height=args.height, ros_args=ros_args
     )
