@@ -19,13 +19,15 @@ import argparse
 import uuid
 from enum import Enum, auto
 
-from PySide6.QtCore import QThread, Signal, Slot
+from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QHeaderView,
     QLabel,
     QMainWindow,
+    QStyledItemDelegate,
+    QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -63,16 +65,18 @@ COLUMN_NAMES = {
     ColumnIdx.DETAILS: "Oracle Details",
 }
 
+TRIN_COLORS = {
+    TrinaryMsg.TRUE: ("TRUE", QColor("darkgreen")),
+    TrinaryMsg.FALSE: ("FALSE", QColor("red")),
+    TrinaryMsg.UNKNOWN: ("UNKNOWN", QColor("darkorange")),
+}
+
 
 def get_trinary_style(value) -> tuple[str, QColor]:
-    if value == TrinaryMsg.TRUE:
-        return "TRUE", QColor("darkgreen")
-    elif value == TrinaryMsg.FALSE:
-        return "FALSE", QColor("red")
-    elif value == TrinaryMsg.UNKNOWN:
-        return "UNKNOWN", QColor("darkorange")
-    else:
+    if value not in TRIN_COLORS:
         raise ValueError(f"Invalid trinary value: {value}")
+
+    return TRIN_COLORS[value]
 
 
 def create_new_scr_item(parent: QTreeWidget, ctx_id: uuid.UUID) -> QTreeWidgetItem:
@@ -115,13 +119,13 @@ def update_scr_item_view(scr_item: QTreeWidgetItem, scr_status: ScenarioStatus) 
 def create_new_fluent_item(scr_item: QTreeWidgetItem, rep: str):
     fl_item = QTreeWidgetItem(scr_item)
     fl_item.setText(ColumnIdx.SCENARIO_FLUENT.value, rep)
+    fl_item.setToolTip(ColumnIdx.SCENARIO_FLUENT.value, rep)
     return fl_item
 
 
 def update_fluent_item_view(fl_item: QTreeWidgetItem, fl_status: FluentStatus):
-    fl_item.setText(
-        ColumnIdx.DETAILS.value, f"Trinary count: {len(fl_status.trinaries)}"
-    )
+    trinary_values = [t.trinary.value for t in fl_status.trinaries]
+    fl_item.setData(ColumnIdx.DETAILS.value, Qt.UserRole, trinary_values)
 
     # Result
     trin_val = fl_status.result.trinary.value
@@ -199,6 +203,50 @@ class RosWorker(QThread):
             rclpy.shutdown()
 
 
+class TrinaryHistoryDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None, square_size=12, spacing=4):
+        super().__init__(parent)
+        self._square_size = square_size
+        self._spacing = spacing
+
+    def paint(self, painter, option, index):
+        # Retrieve the list of trinary values from the UserRole
+        data = index.data(Qt.UserRole)
+
+        if not isinstance(data, list):
+            return super().paint(painter, option, index)
+
+        painter.save()
+
+        # Draw background selection highlight if item is selected
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+
+        # Square settings
+        x = option.rect.x() + self._spacing * 2
+        y = option.rect.y() + (option.rect.height() - self._square_size) // 2
+
+        for val in data:
+            _, color = get_trinary_style(val)
+            painter.setBrush(color)
+            painter.setPen(Qt.NoPen)
+
+            # Draw the square
+            painter.drawRect(QRect(x, y, self._square_size, self._square_size))
+            x += self._square_size + self._spacing
+
+            # Stop drawing if we go outside the column width
+            if x > option.rect.right() - self._square_size:
+                break
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        base_size = super().sizeHint(option, index)
+        # Ensure the row is at least 20 pixels high for our squares
+        return base_size.expandedTo(QSize(0, 20))
+
+
 class BddVisualizer(QMainWindow):
     def __init__(self, status_topic: str, width: int, height: int, ros_args):
         super().__init__()
@@ -215,11 +263,18 @@ class BddVisualizer(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels([COLUMN_NAMES[cl_idx] for cl_idx in ColumnIdx])
         header = self.tree.header()
+
         header.setSectionResizeMode(
-            ColumnIdx.SCENARIO_FLUENT.value, QHeaderView.Stretch
+            ColumnIdx.SCENARIO_FLUENT.value, QHeaderView.Interactive
         )
+        self.tree.setColumnWidth(ColumnIdx.SCENARIO_FLUENT.value, 600)
+        header.setMinimumSectionSize(200)
+
         header.setSectionResizeMode(
             ColumnIdx.DETAILS.value, QHeaderView.ResizeToContents
+        )
+        self.tree.setItemDelegateForColumn(
+            ColumnIdx.DETAILS.value, TrinaryHistoryDelegate(self.tree)
         )
         header.setSectionResizeMode(
             ColumnIdx.RESULT.value, QHeaderView.ResizeToContents
