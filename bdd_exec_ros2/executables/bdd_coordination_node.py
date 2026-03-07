@@ -41,6 +41,7 @@ from bdd_dsl.models.urirefs import (
 )
 from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_dsl.models.observation import ObservationManager, trin_policy_and
+from bdd_dsl.representation import VariableStrTemplate, get_tmpl_fc_is_held, get_tmpl_fc_located_at
 
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
@@ -142,6 +143,8 @@ class BddCoordNode(Node):
     _scenario_contexts: dict[UUID, ScenarioContext]
     _scr_lock: threading.Lock
 
+    _variable_templates: dict[URIRef, VariableStrTemplate | None]
+
     _obs_cb_group: MutuallyExclusiveCallbackGroup
     _topic_fpolicy_reg: dict[str, dict[UUID, set[URIRef]]]
     _fpolicy_subs: dict[str, Subscription]
@@ -219,12 +222,13 @@ class BddCoordNode(Node):
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
-        # Set up context management for executing scenario variants
-        self._scenario_contexts = {}
+        # Add lock to manager objects that may be modified across threads/processes
         self._scr_lock = threading.Lock()
+        self._topic_fpolicy_reg = {}
+        self._scenario_contexts = {}
+        self._variable_templates = {}
 
         # Observation
-        self._topic_fpolicy_reg = {}  # lock thread before modifying
         self._fpolicy_subs = {}
 
     def _send_event(self, evt_uri: URIRef, ctx_id: UUID) -> None:
@@ -313,6 +317,12 @@ class BddCoordNode(Node):
         obs_manager = ObservationManager.from_scenario_variant(
             graph=self.graph,
             scr_var=scr_var,
+            var_tmpls=self._variable_templates,
+            tmpl_creators=[
+                get_tmpl_fc_is_held,
+                get_tmpl_fc_located_at,
+            ],
+            val_dict=val_dict,
             obs_loaders=[
                 load_ros_topic_model,
                 lambda graph, model, cid=scr_context_id, **kwargs: (
