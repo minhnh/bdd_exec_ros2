@@ -46,6 +46,7 @@ from bdd_dsl.representation import (
     get_str_tc_after_event,
     get_str_tc_before_event,
     get_str_tc_during_events,
+    get_tmpl_bhv_pickplace,
     get_tmpl_fc_is_held,
     get_tmpl_fc_located_at,
 )
@@ -237,6 +238,7 @@ class BddCoordNode(Node):
             tmpl_creators=[
                 get_tmpl_fc_is_held,
                 get_tmpl_fc_located_at,
+                get_tmpl_bhv_pickplace,
             ],
             tc_str_gens=[
                 get_str_tc_after_event,
@@ -481,8 +483,10 @@ class BddCoordNode(Node):
                 )
                 return
             ctx = self._scenario_contexts[context_id]
-            self._remove_context_topic_reg(context_id=context_id)
             self._send_event(evt_uri=ctx.obs_manager.scr_end_event, ctx_id=context_id)
+            trin_st, _ = from_trin_stamped_msg(result.result)
+            ctx.obs_manager.update_bhv_result(trin_st=trin_st)
+            self._remove_context_topic_reg(context_id=context_id)
 
 
 def main(args=None):

@@ -115,6 +115,7 @@ def to_scenario_status_msg(
     trinaries_policy: TrinariesPolicyProtocol,
 ) -> ScenarioStatus:
     scr_status = ScenarioStatus()
+    scr_status.representation = obs_manager.scr_rep
     scr_status.context_id = to_uuid_msg(ctx_id)
 
     if obs_manager.scr_start_time is not None:
@@ -123,11 +124,21 @@ def to_scenario_status_msg(
         scr_status.end_time = Time(seconds=obs_manager.scr_end_time).to_msg()
 
     now_msg = now.to_msg()
+    now_stamp = now.to_datetime().timestamp()
+
+    scr_status.behaviour.representation = obs_manager.bhv_rep
+    if obs_manager.bhv_result is None:
+        scr_status.behaviour.result.stamp = now_msg
+    else:
+        scr_status.behaviour.result = to_trin_stamped_msg(
+            trin_st=obs_manager.bhv_result,
+        )
+
     scr_status.fluents = []
     fluent_results = []
     for fl_tl in obs_manager.fluent_timelines.values():
         fl_res = TrinaryStamped(
-            stamp=now.to_datetime().timestamp(),
+            stamp=now_stamp,
             trinary=trinaries_policy(fl_tl.trinary_timeline),
         )
         fluent_results.append(fl_res)
@@ -147,5 +158,10 @@ def to_scenario_status_msg(
         scr_status.fluents.append(fl_status)
 
     scr_status.result.stamp = now_msg
+    if obs_manager.bhv_result is None:
+        bhv_result = TrinaryStamped(stamp=now_stamp, trinary=Unknown)
+    else:
+        bhv_result = obs_manager.bhv_result
+    fluent_results.append(bhv_result)
     scr_status.result.trinary = to_trin_msg(trinaries_policy(fluent_results))
     return scr_status

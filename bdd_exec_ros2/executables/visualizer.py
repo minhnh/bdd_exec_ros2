@@ -39,6 +39,7 @@ import rclpy
 from rclpy.time import Time
 
 from bdd_ros2_interfaces.msg import (
+    BehaviourStatus,
     FluentStatus,
     ScenarioStatus,
     ScenarioStatusList,
@@ -80,11 +81,14 @@ def get_trinary_style(value) -> tuple[str, QColor]:
     return TRIN_COLORS[value]
 
 
-def create_new_scr_item(parent: QTreeWidget, ctx_id: uuid.UUID) -> QTreeWidgetItem:
+def create_new_scr_item(
+    parent: QTreeWidget, ctx_id: uuid.UUID, scr_rep: str
+) -> QTreeWidgetItem:
     scr_item = QTreeWidgetItem(parent)
 
     scr_item.setText(
-        ColumnIdx.SCENARIO_FLUENT.value, f"Scenario: {str(ctx_id.hex[:8])}..."
+        ColumnIdx.SCENARIO_FLUENT.value,
+        f"Scenario: {scr_rep} - {str(ctx_id.hex[:8])}...",
     )
     scr_item.setExpanded(True)
     f = scr_item.font(ColumnIdx.SCENARIO_FLUENT.value)
@@ -117,7 +121,7 @@ def update_scr_item_view(scr_item: QTreeWidgetItem, scr_status: ScenarioStatus) 
     return finished
 
 
-def create_new_fluent_item(scr_item: QTreeWidgetItem, rep: str):
+def create_new_clause_item(scr_item: QTreeWidgetItem, rep: str):
     fl_item = QTreeWidgetItem(scr_item)
     fl_item.setText(ColumnIdx.SCENARIO_FLUENT.value, rep)
     fl_item.setToolTip(ColumnIdx.SCENARIO_FLUENT.value, rep)
@@ -146,6 +150,16 @@ def update_fluent_item_view(fl_item: QTreeWidgetItem, fl_status: FluentStatus):
 
     if fl_status.end_time.sec > 0:
         fl_item.setText(ColumnIdx.END_TIME.value, format_time_msg(fl_status.end_time))
+
+
+def update_bhv_item_view(bhv_item: QTreeWidgetItem, bhv_status: BehaviourStatus):
+    trin_val = bhv_status.result.trinary.value
+    txt, color = get_trinary_style(trin_val)
+    bhv_item.setText(ColumnIdx.RESULT.value, txt)
+    bhv_item.setForeground(ColumnIdx.RESULT.value, QBrush(color))
+    bhv_item.setText(
+        ColumnIdx.RESULT_TIME.value, format_time_msg(bhv_status.result.stamp)
+    )
 
 
 def create_new_trin_item(
@@ -322,9 +336,15 @@ class BddVisualizer(QMainWindow):
             ctx_id = from_uuid_msg(scr_status.context_id)
 
             if ctx_id not in self._scenario_items:
-                scr_item = create_new_scr_item(parent=self.tree, ctx_id=ctx_id)
+                scr_item = create_new_scr_item(
+                    parent=self.tree, ctx_id=ctx_id, scr_rep=scr_status.representation
+                )
+                bhv_item = create_new_clause_item(
+                    scr_item=scr_item, rep=scr_status.behaviour.representation
+                )
                 self._scenario_items[ctx_id] = {
                     "item": scr_item,
+                    "bhv_item": bhv_item,
                     "children": {},
                     "finished": False,
                 }
@@ -335,6 +355,10 @@ class BddVisualizer(QMainWindow):
 
             if scr_finished:
                 continue
+
+            # update behaviour
+            bhv_item = scr_data["bhv_item"]
+            update_bhv_item_view(bhv_item=bhv_item, bhv_status=scr_status.behaviour)
 
             # update scenario item
             scr_finished = update_scr_item_view(
@@ -347,7 +371,7 @@ class BddVisualizer(QMainWindow):
             for fl_status in scr_status.fluents:
                 f_rep = fl_status.representation
                 if f_rep not in scr_data["children"]:
-                    fl_item = create_new_fluent_item(scr_item=scr_item, rep=f_rep)
+                    fl_item = create_new_clause_item(scr_item=scr_item, rep=f_rep)
                     scr_data["children"][f_rep] = {"item": fl_item, "children": {}}
 
                 fl_data = scr_data["children"][f_rep]
