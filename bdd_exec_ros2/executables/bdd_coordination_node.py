@@ -61,6 +61,7 @@ from bdd_ros2_interfaces.msg import (
 from bdd_exec_ros2.conversions import (
     from_trin_stamped_msg,
     from_uuid_msg,
+    ros_time_to_stamp,
     to_paramval_message,
     to_scenario_status_msg,
     to_uuid_msg,
@@ -422,7 +423,7 @@ class BddCoordNode(Node):
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
         evt_uri = URIRef(msg.uri)
-        evt_t = Time.from_msg(msg.stamp).to_datetime().timestamp()
+        evt_t = ros_time_to_stamp(Time.from_msg(msg.stamp))
         evt_ctx_uuid = from_uuid_msg(msg.scenario_context_id)
         with self._scr_lock:
             if evt_ctx_uuid not in self._scenario_contexts:
