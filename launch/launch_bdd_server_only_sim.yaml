@@ -12,7 +12,7 @@ launch:
       default: "$(find-pkg-share bdd_exec_ros2)/config/bdd_server_only_configs.yaml"
   - arg:
       name: "graph_models"
-      default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-dual_arm.yaml"
+      default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-dual_arm-pass.yaml"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"

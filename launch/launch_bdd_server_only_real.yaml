@@ -5,8 +5,11 @@ launch:
       name: "ns"
       default: "bdd"
   - arg:
+      name: "use_sim_time"
+      default: "False"
+  - arg:
       name: "config"
-      default: "$(find-pkg-share bdd_exec_ros2)/config/mockup_configs.yaml"
+      default: "$(find-pkg-share bdd_exec_ros2)/config/bdd_server_only_configs.yaml"
   - arg:
       name: "graph_models"
       default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-dual_arm-pass.yaml"
@@ -19,10 +22,5 @@ launch:
         - from: "$(var config)"
         - name: "graph_models"
           value: "$(var graph_models)"
-  - node:
-      pkg: "bdd_exec_ros2"
-      exec: "mockup_behaviour_node"
-      namespace: "$(var ns)"
-      name: "mockup_behaviour"
-      param:
-        - from: "$(var config)"
+        - name: "use_sim_time"
+          value: "$(var use_sim_time)"

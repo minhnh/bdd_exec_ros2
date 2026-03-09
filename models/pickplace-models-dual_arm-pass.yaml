@@ -8,7 +8,7 @@
   format: "json-ld"
 - path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/pickplace.tmpl.json"
   format: "json-ld"
-- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/variations/pickplace-secorolab-isaac.var.json"
+- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/variations/pickplace-grc-demo-pass.var.json"
   format: "json-ld"
 - path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/execution/pickplace-secorolab-ros.obs.json"
   format: "json-ld"
