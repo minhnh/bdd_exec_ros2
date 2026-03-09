@@ -17,6 +17,15 @@
 from typing import Any, Final, Iterable
 from uuid import UUID
 from datetime import datetime
+from bdd_dsl.models.clauses import WhenBehaviourModel, get_clause_config
+from bdd_dsl.models.urirefs import (
+    URI_BDD_TYPE_CONFIG,
+    URI_BHV_PRED_TARGET_AGN,
+    URI_BHV_PRED_TARGET_OBJ,
+    URI_BHV_TYPE_PICK,
+    URI_BHV_TYPE_PLACE,
+)
+from bdd_dsl.models.user_story import ScenarioVariantModel
 from trinary import Trinary, Unknown
 from rdflib import URIRef
 
@@ -31,6 +40,7 @@ from bdd_dsl.models.observation import (
 )
 
 from bdd_ros2_interfaces.msg import (
+    Configuration,
     FluentStatus,
     ParamValue,
     ScenarioStatus,
@@ -119,6 +129,54 @@ def to_paramval_message(rel_uri: URIRef, val: Any) -> ParamValue:
     )
 
 
+def get_bhv_param_messages(
+    when_bhv: WhenBehaviourModel, var_value_dict: dict[URIRef, Any]
+) -> list[ParamValue]:
+    param_vals = []
+    if URI_BHV_TYPE_PICK or URI_BHV_TYPE_PLACE in when_bhv.types:
+        obj_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_OBJ)
+        assert obj_var_uri is not None
+        assert obj_var_uri in var_value_dict, f"no value for '{obj_var_uri}'"
+        param_vals.append(
+            to_paramval_message(
+                rel_uri=URI_BHV_PRED_TARGET_OBJ, val=var_value_dict[obj_var_uri]
+            )
+        )
+
+        agn_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_AGN)
+        assert agn_var_uri is not None
+        assert agn_var_uri in var_value_dict, f"no value for '{agn_var_uri}'"
+        param_vals.append(
+            to_paramval_message(
+                rel_uri=URI_BHV_PRED_TARGET_AGN, val=var_value_dict[agn_var_uri]
+            )
+        )
+
+    return param_vals
+
+
+def get_cfg_messages(
+    scr_var: ScenarioVariantModel, var_value_dict: dict[URIRef, Any]
+) -> list[Configuration]:
+    configs = []
+    for cfg_clause in scr_var.config_clauses():
+        target_uri, name, var_uri = get_clause_config(clause=cfg_clause)
+        assert var_uri in var_value_dict, (
+            f"get_cfg_messages: no value for var '{var_uri}'"
+        )
+        var_val = var_value_dict[var_uri]
+        assert isinstance(var_val, float), (
+            f"get_cfg_messages: only float config supported, got '{var_val}' ({type(var_val)})"
+        )
+        cfg_msg = Configuration()
+        cfg_msg.target = target_uri.toPython()
+        cfg_msg.name = name
+        cfg_msg.num_value = var_val
+        configs.append(cfg_msg)
+
+    return configs
+
+
 def to_scenario_status_msg(
     ctx_id: UUID,
     obs_manager: ObservationManager,
@@ -152,6 +210,9 @@ def to_scenario_status_msg(
             stamp=now_stamp,
             trinary=trinaries_policy(fl_tl.trinary_timeline),
         )
+        # Always set config result to true for now
+        if URI_BDD_TYPE_CONFIG in fl_tl.fluent_types:
+            fl_res.trinary = True
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()

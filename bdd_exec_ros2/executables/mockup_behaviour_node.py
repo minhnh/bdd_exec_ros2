@@ -250,6 +250,11 @@ class MockupBhvNode(Node):
             if rel_uri == URI_BHV_PRED_TARGET_AGN:
                 agn_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
 
+        for cfg_msg in goal_handle.request.configs:
+            self.get_logger().info(
+                f"Config {cfg_msg.target}: {cfg_msg.name} = {cfg_msg.num_value}"
+            )
+
         pp_fsm = create_fsm()
         ud = UserData(delay_lower=self.delay_lower, delay_upper=self.delay_upper)
 

@@ -31,14 +31,7 @@ from rclpy.time import Time
 from std_msgs.msg import Empty as EmptyMsg
 
 from rdf_utils.models.common import ModelBase
-from bdd_dsl.models.clauses import WhenBehaviourModel
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
-from bdd_dsl.models.urirefs import (
-    URI_BHV_PRED_TARGET_AGN,
-    URI_BHV_PRED_TARGET_OBJ,
-    URI_BHV_TYPE_PICK,
-    URI_BHV_TYPE_PLACE,
-)
 from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_dsl.models.observation import ObservationManager, trin_policy_and
 from bdd_dsl.representation import (
@@ -47,6 +40,7 @@ from bdd_dsl.representation import (
     get_str_tc_before_event,
     get_str_tc_during_events,
     get_tmpl_bhv_pickplace,
+    get_tmpl_fc_config,
     get_tmpl_fc_is_held,
     get_tmpl_fc_located_at,
 )
@@ -54,15 +48,15 @@ from bdd_dsl.representation import (
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
     Event,
-    ParamValue,
     ScenarioStatusList,
     TrinaryStamped,
 )
 from bdd_exec_ros2.conversions import (
     from_trin_stamped_msg,
     from_uuid_msg,
+    get_cfg_messages,
     ros_time_to_stamp,
-    to_paramval_message,
+    get_bhv_param_messages,
     to_scenario_status_msg,
     to_uuid_msg,
 )
@@ -105,32 +99,6 @@ def load_graph_models_in_yaml(models_yml: str) -> Dataset:
             raise RuntimeError(f"Caught {e} while processing '{model_info['path']}'")
 
     return g
-
-
-def get_bhv_param_messages(
-    when_bhv: WhenBehaviourModel, var_value_dict: dict[URIRef, Any]
-) -> list[ParamValue]:
-    param_vals = []
-    if URI_BHV_TYPE_PICK or URI_BHV_TYPE_PLACE in when_bhv.types:
-        obj_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_OBJ)
-        assert obj_var_uri is not None
-        assert obj_var_uri in var_value_dict, f"no value for '{obj_var_uri}'"
-        param_vals.append(
-            to_paramval_message(
-                rel_uri=URI_BHV_PRED_TARGET_OBJ, val=var_value_dict[obj_var_uri]
-            )
-        )
-
-        agn_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_AGN)
-        assert agn_var_uri is not None
-        assert agn_var_uri in var_value_dict, f"no value for '{agn_var_uri}'"
-        param_vals.append(
-            to_paramval_message(
-                rel_uri=URI_BHV_PRED_TARGET_AGN, val=var_value_dict[agn_var_uri]
-            )
-        )
-
-    return param_vals
 
 
 @dataclass
@@ -240,6 +208,9 @@ class BddCoordNode(Node):
                 get_tmpl_fc_is_held,
                 get_tmpl_fc_located_at,
                 get_tmpl_bhv_pickplace,
+                lambda model, **kwargs: get_tmpl_fc_config(
+                    model, ns_manager=self.graph.namespace_manager, **kwargs
+                ),
             ],
             tc_str_gens=[
                 get_str_tc_after_event,
@@ -361,6 +332,7 @@ class BddCoordNode(Node):
         goal_msg = Behaviour.Goal()
         goal_msg.scenario_context_id = to_uuid_msg(scr_context_id)
         goal_msg.parameters = get_bhv_param_messages(scr_var.when_bhv_model, val_dict)
+        goal_msg.configs = get_cfg_messages(scr_var=scr_var, var_value_dict=val_dict)
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
 
