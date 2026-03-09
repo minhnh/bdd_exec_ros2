@@ -326,9 +326,9 @@ def main(args=None):
         node_name = getattr(args, "node_name", __DEFAULT_NODE_NAME)
 
     try:
-        with rclpy.init(args=args):
-            mockup_bhv_node = MockupBhvNode(node_name=node_name)
-            rclpy.spin(mockup_bhv_node)
+        rclpy.init(args=args)
+        mockup_bhv_node = MockupBhvNode(node_name=node_name)
+        rclpy.spin(mockup_bhv_node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
 

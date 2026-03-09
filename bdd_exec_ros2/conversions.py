@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Iterable
+from datetime import datetime
+from typing import Any, Final, Iterable
 from uuid import UUID
 from trinary import Trinary, Unknown
 from rdflib import URIRef
@@ -38,8 +39,18 @@ from bdd_ros2_interfaces.msg import (
 )
 
 
+S_TO_NS: Final = 1000 * 1000 * 1000
+
+
+def time_to_stamp(t: Time):
+    """Time to timestamp conversion, copied from rolling"""
+    return t.nanoseconds / S_TO_NS
+
+
 def format_time_msg(msg: TimeMsg) -> str:
-    return Time.from_msg(msg).to_datetime().strftime("%Y-%m-%d %H:%M:%S.%f")
+    return datetime.fromtimestamp(
+        time_to_stamp(Time.from_msg(msg))
+    ).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 def to_uuid_msg(uuid: UUID) -> UUIDMsg:
@@ -53,7 +64,7 @@ def from_uuid_msg(uuid_msg: UUIDMsg) -> UUID:
 
 
 def from_trin_stamped_msg(msg: TrinaryStampedMsg) -> tuple[TrinaryStamped, UUID]:
-    epoch_t = Time.from_msg(msg.stamp).to_datetime().timestamp()
+    epoch_t = time_to_stamp(Time.from_msg(msg.stamp))
     if msg.trinary.value == TrinaryMsg.FALSE:
         trin = False
     elif msg.trinary.value == TrinaryMsg.TRUE:
@@ -124,7 +135,7 @@ def to_scenario_status_msg(
         scr_status.end_time = Time(seconds=obs_manager.scr_end_time).to_msg()
 
     now_msg = now.to_msg()
-    now_stamp = now.to_datetime().timestamp()
+    now_stamp = time_to_stamp(now)
 
     scr_status.behaviour.representation = obs_manager.bhv_rep
     if obs_manager.bhv_result is None:

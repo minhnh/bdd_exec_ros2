@@ -46,7 +46,7 @@ from bdd_ros2_interfaces.msg import (
     Trinary as TrinaryMsg,
     TrinaryStamped,
 )
-from bdd_exec_ros2.conversions import format_time_msg, from_uuid_msg
+from bdd_exec_ros2.conversions import format_time_msg, from_uuid_msg, time_to_stamp
 
 
 class ColumnIdx(Enum):
@@ -381,7 +381,7 @@ class BddVisualizer(QMainWindow):
 
                 active_trins = set()
                 for trin_msg in fl_status.trinaries:
-                    trin_t = Time.from_msg(trin_msg.stamp).to_datetime().timestamp()
+                    trin_t = time_to_stamp(Time.from_msg(trin_msg.stamp))
                     active_trins.add(trin_t)
                     if trin_t in fl_data["children"]:
                         # assuming pass trin won't change
