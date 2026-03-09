@@ -258,9 +258,11 @@ class BddCoordNode(Node):
             ctx = self._scenario_contexts[ctx_uuid]
             policies = self._topic_fpolicy_reg[topic_name][ctx_uuid]
             for fpolicy_uri in policies:
-                ctx.obs_manager.update_fpolicy_assertion(
+                updated, reason = ctx.obs_manager.update_fpolicy_assertion(
                     fc_uri=fpolicy_uri, trin_st=trin_st
                 )
+                if not updated:
+                    self.get_logger().warning(f"trinary not added: {reason}")
 
     def _create_subscription(self, model: ModelBase, context_id: UUID):
         if URI_ROS_TYPE_TOPIC not in model.types:
