@@ -1,22 +1,23 @@
-NAME: pickplace
+ns tmpl = "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/"
+
+FSM (ns=tmpl) pickplace {
 DESCRIPTION: "Example of a simple FSM for pick-place application"
 
 STATES: S_START,S_PERCEIVE,S_APPROACH,S_PICK,S_PLACE,S_EXIT
 
 START_STATE: @S_START
-CURRENT_STATE: @S_START
 END_STATE: @S_EXIT
 
 EVENTS:
-    E_PERCEIVE_DONE,
-    E_PICK_APPROACH_START,
-    E_PICK_APPROACH_DONE,
-    E_PLACE_APPROACH_START,
-    E_PLACE_APPROACH_DONE,
-    E_PICK_DONE,
-    E_PLACE_DONE,
-    E_PREEMPTED,
-    E_STEP
+    evt-perceive-done,
+    evt-pick-start,
+    evt-pick-approach-done,
+    evt-place-start,
+    evt-place-approach-done,
+    evt-pick-end,
+    evt-place-end,
+    evt-preempted,
+    evt-step
 
 TRANSITIONS:
     T_START_PERCEIVE:
@@ -61,48 +62,49 @@ TRANSITIONS:
 
 REACTIONS:
     R_E_PREEMPTED_PERCEIVE:
-        WHEN: @E_PREEMPTED
+        WHEN: @evt-preempted
         DO: @T_PERCEIVE_EXIT
     R_E_PREEMPTED_APPROACH:
-        WHEN: @E_PREEMPTED
+        WHEN: @evt-preempted
         DO: @T_APPROACH_EXIT
     R_E_PREEMPTED_PICK:
-        WHEN: @E_PREEMPTED
+        WHEN: @evt-preempted
         DO: @T_PICK_EXIT
     R_E_PREEMPTED_PLACE:
-        WHEN: @E_PREEMPTED
+        WHEN: @evt-preempted
         DO: @T_PLACE_EXIT
 
     R_E_PERCEIVE_DONE:
-        WHEN: @E_PERCEIVE_DONE
+        WHEN: @evt-perceive-done
         DO: @T_PERCEIVE_APPROACH
-        FIRES: @E_PICK_APPROACH_START
+        FIRES: @evt-pick-start
     R_E_PICK_APPROACH_DONE:
-        WHEN: @E_PICK_APPROACH_DONE
+        WHEN: @evt-pick-approach-done
         DO: @T_APPROACH_PICK
     R_E_PLACE_APPROACH_DONE:
-        WHEN: @E_PLACE_APPROACH_DONE
+        WHEN: @evt-place-approach-done
         DO: @T_APPROACH_PLACE
     R_E_PICK_DONE:
-        WHEN: @E_PICK_DONE
+        WHEN: @evt-pick-end
         DO: @T_PICK_APPROACH
-        FIRES: @E_PLACE_APPROACH_START
+        FIRES: @evt-place-start
     R_E_PLACE_DONE:
-        WHEN: @E_PLACE_DONE
+        WHEN: @evt-place-end
         DO: @T_PLACE_EXIT
 
     R_E_STEP_START:
-        WHEN: @E_STEP
+        WHEN: @evt-step
         DO: @T_START_PERCEIVE
     R_E_STEP_PERCEIVE:
-        WHEN: @E_STEP
+        WHEN: @evt-step
         DO: @T_PERCEIVE_PERCEIVE
     R_E_STEP_APPROACH:
-        WHEN: @E_STEP
+        WHEN: @evt-step
         DO: @T_APPROACH_APPROACH
     R_E_STEP_PICK:
-        WHEN: @E_STEP
+        WHEN: @evt-step
         DO: @T_PICK_PICK
     R_E_STEP_PLACE:
-        WHEN: @E_STEP
+        WHEN: @evt-step
         DO: @T_PLACE_PLACE
+}
