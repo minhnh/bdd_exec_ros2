@@ -1,5 +1,8 @@
 # bdd-exec-ros2
 
+Package for handling execution of RobBDD models using ROS2 communication.
+A GUI tool is also available for visualizing test results.
+
 ## Dependencies
 
 - Python packages:
@@ -9,13 +12,54 @@
 - ROS packages:
   + [minhnh/bdd_ros2_interfaces](https://github.com/minhnh/bdd_ros2_interfaces)
 
-## Nodes
+## Quick start
 
-### Mockup behaviour
+A mockup setup is available for testing communication between the test coordinator node with
+a mockup behaviour action server, which cycle through a pick & place state machine and publishes
+the expected events and trinary messages. A more detailed tutorial on the interactions of these
+components is available on the [`bdd-dsl` landing page](https://secorolab.github.io/bdd-dsl/).
 
-The [FSM](./models/pickplace.fsm) for the pick-place behaviour generates to the [Python implementation](./bdd_exec_ros2/behaviours/fsm_pickplace.py)
-with [coord-dsl](https://github.com/secorolab/coord-dsl).
-The package is also required to execute the mockup behaviour node.
+To run the mockup setup:
+
+1. Run the mockup launch file:
+
+   ```bash
+   ros2 launch bdd_exec_ros2 launch_mockup.yaml
+   ```
+
+1. (Optional) Run the visualizer:
+
+    ```bash
+    ros2 run bdd_exec_ros2 visualizer
+    ```
+
+1. Trigger test execution:
+
+    ```bash
+    ros2 topic pub /bdd/start std_msgs/msg/Empty "{}" -1
+    ```
+
+## Executables
+
+### BDD Test Coordinator
+
+[`bdd_coordination_node.py`](./bdd_exec_ros2/executables/bdd_coordination_node.py) loads BDD model
+(as RDF graph or RobBDD) and, when triggered, send goal for each scenario variation to a
+[behaviour action server](https://github.com/minhnh/bdd_ros2_interfaces/blob/-/action/Behaviour.action).
+
+### Test Result Visualizer
+
+The [`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) script visualizes trinaries and clause assertions
+for each executed scenario variations. A successful (mockup) test execution should appear like the following:
+
+![Visualizer screenshot](./docs/visualizer-sceenshot.png)
+
+### Mockup Behaviour Server
+
+[mockup_behaviour_node.py](./bdd_exec_ros2/executables/mockup_behaviour_node.py) cycles through states of a
+finite-state-machine (FSM) for a pick & place behaviour, while sending events and trinary messages as expected by
+the BDD coordinator node. The [FSM Python implementation](./bdd_exec_ros2/behaviours/fsm_pickplace.py) is generated
+from the [FSM model](./models/pickplace.fsm) using [coord-dsl](https://github.com/secorolab/coord-dsl).
 
 ## Virtual environment setup with ROS2
 
