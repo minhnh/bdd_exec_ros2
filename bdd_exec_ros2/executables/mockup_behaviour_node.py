@@ -52,10 +52,10 @@ NS_MANAGER.bind("tmpl", NS_M_TMPL)
 
 
 EXPORTED_EVENTS = {
-    EventID.evt_pick_start,
-    EventID.evt_pick_end,
-    EventID.evt_place_start,
-    EventID.evt_place_end,
+    EventID.EVT_PICK_START,
+    EventID.EVT_PICK_END,
+    EventID.EVT_PLACE_START,
+    EventID.EVT_PLACE_END,
 }
 
 
@@ -110,7 +110,7 @@ def fsm_mockup_bhv(fsm: FSMData, ud: UserData):
         if not ud.elapsed(cur_state=current_state):
             return
         ud.picking = True
-        produce_event(event_data=fsm.event_data, event_index=EventID.evt_perceive_done)
+        produce_event(event_data=fsm.event_data, event_index=EventID.EVT_PERCEIVE_DONE)
         return
 
     if current_state == StateID.S_APPROACH:
@@ -119,12 +119,12 @@ def fsm_mockup_bhv(fsm: FSMData, ud: UserData):
 
         if ud.picking:
             assert not ud.placing, "both 'picking' & 'placing' are true in UserData"
-            produce_event(fsm.event_data, event_index=EventID.evt_pick_approach_done)
+            produce_event(fsm.event_data, event_index=EventID.EVT_PICK_APPROACH_DONE)
             return
 
         if ud.placing:
             assert not ud.picking, "both 'placing' & 'picking' are true in UserData"
-            produce_event(fsm.event_data, event_index=EventID.evt_place_approach_done)
+            produce_event(fsm.event_data, event_index=EventID.EVT_PLACE_APPROACH_DONE)
             return
 
         raise AssertionError("Neither 'picking' or placing is true in approach state")
@@ -135,7 +135,7 @@ def fsm_mockup_bhv(fsm: FSMData, ud: UserData):
 
         ud.picking = False
         ud.placing = True
-        produce_event(fsm.event_data, event_index=EventID.evt_pick_end)
+        produce_event(fsm.event_data, event_index=EventID.EVT_PICK_END)
         return
 
     if current_state == StateID.S_PLACE:
@@ -144,7 +144,7 @@ def fsm_mockup_bhv(fsm: FSMData, ud: UserData):
 
         ud.placing = False
         ud.succeeded.value = Trinary.TRUE
-        produce_event(fsm.event_data, event_index=EventID.evt_place_end)
+        produce_event(fsm.event_data, event_index=EventID.EVT_PLACE_END)
         return
 
 
@@ -276,7 +276,7 @@ class MockupBhvNode(Node):
                 continue
             while loop_timeout < now:
                 loop_timeout += self.loop_duration
-            produce_event(pp_fsm.event_data, EventID.evt_step)
+            produce_event(pp_fsm.event_data, EventID.EVT_STEP)
 
             for evt in EXPORTED_EVENTS:
                 if not consume_event(pp_fsm.event_data, evt):

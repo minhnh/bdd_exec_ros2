@@ -40,15 +40,14 @@ from coord_dsl.fsm import FSMData, Transition, EventReaction
 
 # Event IDs
 class EventID(IntEnum):
-    evt_perceive_done = 0
-    evt_pick_start = auto()
-    evt_pick_approach_done = auto()
-    evt_place_start = auto()
-    evt_place_approach_done = auto()
-    evt_pick_end = auto()
-    evt_place_end = auto()
-    evt_preempted = auto()
-    evt_step = auto()
+    EVT_PERCEIVE_DONE = 0
+    EVT_PICK_START = auto()
+    EVT_PICK_APPROACH_DONE = auto()
+    EVT_PLACE_START = auto()
+    EVT_PLACE_APPROACH_DONE = auto()
+    EVT_PICK_END = auto()
+    EVT_PLACE_END = auto()
+    EVT_STEP = auto()
 
 
 # State IDs
@@ -80,11 +79,7 @@ class TransitionID(IntEnum):
 
 # Event reaction IDs
 class ReactionID(IntEnum):
-    R_E_PREEMPTED_PERCEIVE = 0
-    R_E_PREEMPTED_APPROACH = auto()
-    R_E_PREEMPTED_PICK = auto()
-    R_E_PREEMPTED_PLACE = auto()
-    R_E_PERCEIVE_DONE = auto()
+    R_E_PERCEIVE_DONE = 0
     R_E_PICK_APPROACH_DONE = auto()
     R_E_PLACE_APPROACH_DONE = auto()
     R_E_PICK_DONE = auto()
@@ -107,15 +102,14 @@ STATE_URIS: dict[StateID, str] = {
 }
 
 EVENT_URIS: dict[EventID, str] = {
-    EventID.evt_perceive_done: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-perceive-done",
-    EventID.evt_pick_start: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-pick-start",
-    EventID.evt_pick_approach_done: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-pick-approach-done",
-    EventID.evt_place_start: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-place-start",
-    EventID.evt_place_approach_done: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-place-approach-done",
-    EventID.evt_pick_end: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-pick-end",
-    EventID.evt_place_end: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-place-end",
-    EventID.evt_preempted: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-preempted",
-    EventID.evt_step: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-step",
+    EventID.EVT_PERCEIVE_DONE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-perceive-done",
+    EventID.EVT_PICK_START: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-pick-start",
+    EventID.EVT_PICK_APPROACH_DONE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-pick-approach-done",
+    EventID.EVT_PLACE_START: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-place-start",
+    EventID.EVT_PLACE_APPROACH_DONE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-place-approach-done",
+    EventID.EVT_PICK_END: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-pick-end",
+    EventID.EVT_PLACE_END: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-place-end",
+    EventID.EVT_STEP: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/evt-step",
 }
 
 TRANSITION_URIS: dict[TransitionID, str] = {
@@ -135,10 +129,6 @@ TRANSITION_URIS: dict[TransitionID, str] = {
 }
 
 REACTION_URIS: dict[ReactionID, str] = {
-    ReactionID.R_E_PREEMPTED_PERCEIVE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PREEMPTED_PERCEIVE",
-    ReactionID.R_E_PREEMPTED_APPROACH: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PREEMPTED_APPROACH",
-    ReactionID.R_E_PREEMPTED_PICK: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PREEMPTED_PICK",
-    ReactionID.R_E_PREEMPTED_PLACE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PREEMPTED_PLACE",
     ReactionID.R_E_PERCEIVE_DONE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PERCEIVE_DONE",
     ReactionID.R_E_PICK_APPROACH_DONE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PICK_APPROACH_DONE",
     ReactionID.R_E_PLACE_APPROACH_DONE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/R_E_PLACE_APPROACH_DONE",
@@ -180,77 +170,57 @@ def create_fsm() -> FSMData:
 
     # Event Reactions
     evt_reaction_dict = {
-        ReactionID.R_E_PREEMPTED_PERCEIVE: EventReaction(
-            condition_event_index=EventID.evt_preempted,
-            transition_index=TransitionID.T_PERCEIVE_EXIT,
-            fired_event_indices=[],
-        ),
-        ReactionID.R_E_PREEMPTED_APPROACH: EventReaction(
-            condition_event_index=EventID.evt_preempted,
-            transition_index=TransitionID.T_APPROACH_EXIT,
-            fired_event_indices=[],
-        ),
-        ReactionID.R_E_PREEMPTED_PICK: EventReaction(
-            condition_event_index=EventID.evt_preempted,
-            transition_index=TransitionID.T_PICK_EXIT,
-            fired_event_indices=[],
-        ),
-        ReactionID.R_E_PREEMPTED_PLACE: EventReaction(
-            condition_event_index=EventID.evt_preempted,
-            transition_index=TransitionID.T_PLACE_EXIT,
-            fired_event_indices=[],
-        ),
         ReactionID.R_E_PERCEIVE_DONE: EventReaction(
-            condition_event_index=EventID.evt_perceive_done,
+            condition_event_index=EventID.EVT_PERCEIVE_DONE,
             transition_index=TransitionID.T_PERCEIVE_APPROACH,
             fired_event_indices=[
-                EventID.evt_pick_start,
+                EventID.EVT_PICK_START,
             ],
         ),
         ReactionID.R_E_PICK_APPROACH_DONE: EventReaction(
-            condition_event_index=EventID.evt_pick_approach_done,
+            condition_event_index=EventID.EVT_PICK_APPROACH_DONE,
             transition_index=TransitionID.T_APPROACH_PICK,
             fired_event_indices=[],
         ),
         ReactionID.R_E_PLACE_APPROACH_DONE: EventReaction(
-            condition_event_index=EventID.evt_place_approach_done,
+            condition_event_index=EventID.EVT_PLACE_APPROACH_DONE,
             transition_index=TransitionID.T_APPROACH_PLACE,
             fired_event_indices=[],
         ),
         ReactionID.R_E_PICK_DONE: EventReaction(
-            condition_event_index=EventID.evt_pick_end,
+            condition_event_index=EventID.EVT_PICK_END,
             transition_index=TransitionID.T_PICK_APPROACH,
             fired_event_indices=[
-                EventID.evt_place_start,
+                EventID.EVT_PLACE_START,
             ],
         ),
         ReactionID.R_E_PLACE_DONE: EventReaction(
-            condition_event_index=EventID.evt_place_end,
+            condition_event_index=EventID.EVT_PLACE_END,
             transition_index=TransitionID.T_PLACE_EXIT,
             fired_event_indices=[],
         ),
         ReactionID.R_E_STEP_START: EventReaction(
-            condition_event_index=EventID.evt_step,
+            condition_event_index=EventID.EVT_STEP,
             transition_index=TransitionID.T_START_PERCEIVE,
             fired_event_indices=[],
         ),
         ReactionID.R_E_STEP_PERCEIVE: EventReaction(
-            condition_event_index=EventID.evt_step,
+            condition_event_index=EventID.EVT_STEP,
             transition_index=TransitionID.T_PERCEIVE_PERCEIVE,
             fired_event_indices=[],
         ),
         ReactionID.R_E_STEP_APPROACH: EventReaction(
-            condition_event_index=EventID.evt_step,
+            condition_event_index=EventID.EVT_STEP,
             transition_index=TransitionID.T_APPROACH_APPROACH,
             fired_event_indices=[],
         ),
         ReactionID.R_E_STEP_PICK: EventReaction(
-            condition_event_index=EventID.evt_step,
+            condition_event_index=EventID.EVT_STEP,
             transition_index=TransitionID.T_PICK_PICK,
             fired_event_indices=[],
         ),
         ReactionID.R_E_STEP_PLACE: EventReaction(
-            condition_event_index=EventID.evt_step,
+            condition_event_index=EventID.EVT_STEP,
             transition_index=TransitionID.T_PLACE_PLACE,
             fired_event_indices=[],
         ),

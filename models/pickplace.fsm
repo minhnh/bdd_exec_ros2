@@ -16,7 +16,6 @@ EVENTS:
     evt-place-approach-done,
     evt-pick-end,
     evt-place-end,
-    evt-preempted,
     evt-step
 
 TRANSITIONS:
@@ -61,19 +60,6 @@ TRANSITIONS:
         TO: @S_EXIT
 
 REACTIONS:
-    R_E_PREEMPTED_PERCEIVE:
-        WHEN: @evt-preempted
-        DO: @T_PERCEIVE_EXIT
-    R_E_PREEMPTED_APPROACH:
-        WHEN: @evt-preempted
-        DO: @T_APPROACH_EXIT
-    R_E_PREEMPTED_PICK:
-        WHEN: @evt-preempted
-        DO: @T_PICK_EXIT
-    R_E_PREEMPTED_PLACE:
-        WHEN: @evt-preempted
-        DO: @T_PLACE_EXIT
-
     R_E_PERCEIVE_DONE:
         WHEN: @evt-perceive-done
         DO: @T_PERCEIVE_APPROACH
