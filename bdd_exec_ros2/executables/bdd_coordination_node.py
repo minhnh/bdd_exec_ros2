@@ -36,6 +36,7 @@ from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_dsl.models.observation import ObservationManager, trin_policy_and
 from bdd_dsl.representation import (
     ClauseRepBuilder,
+    ScenarioVariantRep,
     get_str_tc_after_event,
     get_str_tc_before_event,
     get_str_tc_during_events,
@@ -107,6 +108,7 @@ class ScenarioContext:
 
     context_id: UUID
     obs_manager: ObservationManager
+    scr_rep: ScenarioVariantRep
     variation_params: dict[URIRef, Any]
     # Useful for handling timeout, cancelation
     goal_handle: Optional[ClientGoalHandle] = None
@@ -310,8 +312,6 @@ class BddCoordNode(Node):
         obs_manager = ObservationManager.from_scenario_variant(
             graph=self.graph,
             scr_var=scr_var,
-            clause_rep_builder=self._clause_rep_builder,
-            val_dict=val_dict,
             obs_loaders=[
                 load_ros_topic_model,
                 lambda graph, model, cid=scr_context_id, **kwargs: (
@@ -320,10 +320,18 @@ class BddCoordNode(Node):
             ],
         )
 
+        scr_rep = ScenarioVariantRep(
+            scr_var=scr_var,
+            clause_rep_builder=self._clause_rep_builder,
+            val_dict=val_dict,
+            ns_manager=self.graph.namespace_manager,
+        )
+
         context = ScenarioContext(
             context_id=scr_context_id,
             variation_params=val_dict,
             obs_manager=obs_manager,
+            scr_rep=scr_rep,
         )
 
         # Publish scenario start event
@@ -363,6 +371,7 @@ class BddCoordNode(Node):
             scr_status = to_scenario_status_msg(
                 ctx_id=ctx_id,
                 obs_manager=scr_ctx.obs_manager,
+                scr_rep=scr_ctx.scr_rep,
                 now=now,
                 trinaries_policy=trin_policy_and,
             )
