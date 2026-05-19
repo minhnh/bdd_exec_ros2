@@ -11,6 +11,7 @@ A GUI tool is also available for visualizing test results.
   + [coord-dsl](https://github.com/secorolab/coord-dsl)
 - ROS packages:
   + [minhnh/bdd_ros2_interfaces](https://github.com/minhnh/bdd_ros2_interfaces)
+- Visualizer script requires [PySide6](https://pypi.org/project/PySide6/).
 
 ## Quick start
 

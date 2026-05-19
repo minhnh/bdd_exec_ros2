@@ -26,6 +26,7 @@ from bdd_dsl.models.urirefs import (
     URI_BHV_TYPE_PLACE,
 )
 from bdd_dsl.models.user_story import ScenarioVariantModel
+from bdd_dsl.representation import ScenarioVariantRep
 from trinary import Trinary, Unknown
 from rdflib import URIRef
 
@@ -180,11 +181,12 @@ def get_cfg_messages(
 def to_scenario_status_msg(
     ctx_id: UUID,
     obs_manager: ObservationManager,
+    scr_rep: ScenarioVariantRep,
     now: Time,
     trinaries_policy: TrinariesPolicyProtocol,
 ) -> ScenarioStatus:
     scr_status = ScenarioStatus()
-    scr_status.representation = obs_manager.scr_rep
+    scr_status.representation = scr_rep.variant_rep
     scr_status.context_id = to_uuid_msg(ctx_id)
 
     if obs_manager.scr_start_time is not None:
@@ -195,7 +197,7 @@ def to_scenario_status_msg(
     now_msg = now.to_msg()
     now_stamp = ros_time_to_stamp(now)
 
-    scr_status.behaviour.representation = obs_manager.bhv_rep
+    scr_status.behaviour.representation = scr_rep.bhv_rep
     if obs_manager.bhv_result is None:
         scr_status.behaviour.result.stamp = now_msg
     else:
@@ -216,7 +218,7 @@ def to_scenario_status_msg(
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()
-        fl_status.representation = fl_tl.representation
+        fl_status.representation = scr_rep.clause_rep(clause_id=fl_tl.fluent_id)
         if fl_tl.start_time is not None:
             fl_status.start_time = Time(seconds=fl_tl.start_time).to_msg()
         if fl_tl.end_time is not None:
