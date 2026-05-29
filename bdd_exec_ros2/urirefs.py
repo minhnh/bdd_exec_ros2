@@ -17,8 +17,10 @@ from rdflib import Namespace
 
 URI_MM_ROS = "https://index.ros.org/p/"
 
-NS_MM_OBS = Namespace(URI_MM_ROS)
+NS_MM_ROS = Namespace(URI_MM_ROS)
 
-URI_ROS_TYPE_TOPIC = NS_MM_OBS["ROSTopic"]
-URI_ROS_PRED_TOPIC_NAME = NS_MM_OBS["topic-name"]
-URI_ROS_PRED_MSG_TYPE = NS_MM_OBS["message-type"]
+URI_ROS_TYPE_TOPIC = NS_MM_ROS["Topic"]
+URI_ROS_TYPE_SERVICE = NS_MM_ROS["Service"]
+URI_ROS_TYPE_ACTION = NS_MM_ROS["Action"]
+URI_ROS_PRED_CHNL_NAME = NS_MM_ROS["channel-name"]
+URI_ROS_PRED_TYPE_NAME = NS_MM_ROS["type-name"]

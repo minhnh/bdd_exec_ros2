@@ -61,10 +61,10 @@ from bdd_exec_ros2.conversions import (
     to_scenario_status_msg,
     to_uuid_msg,
 )
-from bdd_exec_ros2.observation import load_ros_topic_model
+from bdd_exec_ros2.observation import load_ros_action_model, load_ros_topic_model
 from bdd_exec_ros2.urirefs import (
-    URI_ROS_PRED_MSG_TYPE,
-    URI_ROS_PRED_TOPIC_NAME,
+    URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_PRED_CHNL_NAME,
     URI_ROS_TYPE_TOPIC,
 )
 
@@ -261,7 +261,7 @@ class BddCoordNode(Node):
             policies = self._topic_fpolicy_reg[topic_name][ctx_uuid]
             for fpolicy_uri in policies:
                 updated, reason = ctx.obs_manager.update_fpolicy_assertion(
-                    fc_uri=fpolicy_uri, trin_st=trin_st
+                    policy_uri=fpolicy_uri, trin_st=trin_st
                 )
                 if not updated:
                     self.get_logger().warning(f"trinary not added: {reason}")
@@ -273,8 +273,8 @@ class BddCoordNode(Node):
             )
             return
 
-        topic_name = model.get_attr(key=URI_ROS_PRED_TOPIC_NAME)
-        msg_type = model.get_attr(key=URI_ROS_PRED_MSG_TYPE)
+        topic_name = model.get_attr(key=URI_ROS_PRED_CHNL_NAME)
+        msg_type = model.get_attr(key=URI_ROS_PRED_TYPE_NAME)
         assert isinstance(topic_name, str) and msg_type is not None, (
             f"invalid attrs for {model.id}: topic={topic_name}, msg_type={msg_type}"
         )
@@ -312,6 +312,7 @@ class BddCoordNode(Node):
         obs_manager = ObservationManager.from_scenario_variant(
             graph=self.graph,
             scr_var=scr_var,
+            bhv_loaders=[load_ros_action_model],
             obs_loaders=[
                 load_ros_topic_model,
                 lambda graph, model, cid=scr_context_id, **kwargs: (
@@ -336,7 +337,7 @@ class BddCoordNode(Node):
 
         # Publish scenario start event
         self._send_event(
-            evt_uri=context.obs_manager.scr_start_event, ctx_id=scr_context_id
+            evt_uri=context.obs_manager.scenario_exec.start_event, ctx_id=scr_context_id
         )
 
         goal_msg = Behaviour.Goal()
@@ -431,7 +432,7 @@ class BddCoordNode(Node):
             self.get_logger().error(f"Goal rejected for {context_id}, removing context")
             with self._scr_lock:
                 self._send_event(
-                    evt_uri=ctx.obs_manager.scr_end_event, ctx_id=context_id
+                    evt_uri=ctx.obs_manager.scenario_exec.end_event, ctx_id=context_id
                 )
                 self._remove_context_topic_reg(context_id=context_id)
             return
@@ -454,7 +455,7 @@ class BddCoordNode(Node):
         result_uuid = from_uuid_msg(result.result.scenario_context_id)
         if context_id != result_uuid:
             self.get_logger().error(
-                "Result callback: context ID doesn't match {context_id.hex} != {result_uuid.hex}"
+                f"Result callback: context ID doesn't match {context_id.hex} != {result_uuid.hex}"
             )
         self.get_logger().info(
             f"Result received for {context_id.hex}: {result.result.trinary.value}"
@@ -467,7 +468,9 @@ class BddCoordNode(Node):
                 )
                 return
             ctx = self._scenario_contexts[context_id]
-            self._send_event(evt_uri=ctx.obs_manager.scr_end_event, ctx_id=context_id)
+            self._send_event(
+                evt_uri=ctx.obs_manager.scenario_exec.end_event, ctx_id=context_id
+            )
             trin_st, _ = from_trin_stamped_msg(result.result)
             ctx.obs_manager.update_bhv_result(trin_st=trin_st)
             self._remove_context_topic_reg(context_id=context_id)
