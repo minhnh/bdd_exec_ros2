@@ -207,24 +207,24 @@ def to_scenario_status_msg(
 
     scr_status.fluents = []
     fluent_results = []
-    for fl_tl in obs_manager.fluent_timelines.values():
+    for obs_pol in obs_manager.obs_policies.values():
         fl_res = TrinaryStamped(
             stamp=now_stamp,
-            trinary=trinaries_policy(fl_tl.trinary_timeline),
+            trinary=trinaries_policy(obs_pol.trinary_timeline),
         )
         # Always set config result to true for now
-        if URI_BDD_TYPE_CONFIG in fl_tl.fluent_types:
+        if URI_BDD_TYPE_CONFIG in obs_pol.fluent_types:
             fl_res.trinary = True
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()
-        fl_status.representation = scr_rep.clause_rep(clause_id=fl_tl.fluent_id)
-        if fl_tl.start_time is not None:
-            fl_status.start_time = Time(seconds=fl_tl.start_time).to_msg()
-        if fl_tl.end_time is not None:
-            fl_status.end_time = Time(seconds=fl_tl.end_time).to_msg()
+        fl_status.representation = scr_rep.clause_rep(clause_id=obs_pol.fluent_id)
+        if obs_pol.start_time is not None:
+            fl_status.start_time = Time(seconds=obs_pol.start_time).to_msg()
+        if obs_pol.end_time is not None:
+            fl_status.end_time = Time(seconds=obs_pol.end_time).to_msg()
         fl_status.trinaries = [
-            to_trin_stamped_msg(trin_st) for trin_st in fl_tl.trinary_timeline
+            to_trin_stamped_msg(trin_st) for trin_st in obs_pol.trinary_timeline
         ]
 
         fl_status.result = to_trin_stamped_msg(fl_res)
