@@ -45,7 +45,11 @@ from bdd_dsl.representation import (
     get_tmpl_fc_is_held,
     get_tmpl_fc_located_at,
 )
-
+from bdd_dsl.models.urirefs import (
+    URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_PRED_CHNL_NAME,
+    URI_ROS_TYPE_TOPIC,
+)
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
     Event,
@@ -62,11 +66,6 @@ from bdd_exec_ros2.conversions import (
     to_uuid_msg,
 )
 from bdd_exec_ros2.observation import load_ros_action_model, load_ros_topic_model
-from bdd_exec_ros2.urirefs import (
-    URI_ROS_PRED_TYPE_NAME,
-    URI_ROS_PRED_CHNL_NAME,
-    URI_ROS_TYPE_TOPIC,
-)
 
 
 __DEFAULT_NODE_NAME = "test_coordinator"
