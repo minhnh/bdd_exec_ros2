@@ -15,7 +15,7 @@
 from rosidl_runtime_py.utilities import get_action, get_message
 from rdflib import Graph, Literal
 from rdf_utils.models.common import ModelBase
-from bdd_exec_ros2.urirefs import (
+from bdd_dsl.models.urirefs import (
     URI_ROS_PRED_TYPE_NAME,
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_TYPE_ACTION,
