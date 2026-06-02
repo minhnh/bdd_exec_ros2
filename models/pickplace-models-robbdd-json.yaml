@@ -1,0 +1,8 @@
+- path: "models/pickplace_table_custom.bdd.json"
+  format: "json-ld"
+  path_type: "ros"
+  package_name: "bdd_exec_ros2"
+- path: "models/pickplace_table_custom.bddx.json"
+  format: "json-ld"
+  path_type: "ros"
+  package_name: "bdd_exec_ros2"

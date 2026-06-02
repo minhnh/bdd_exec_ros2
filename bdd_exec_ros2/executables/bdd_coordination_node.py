@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from typing import Any, Optional
+import os
 from uuid import UUID, uuid4
 from dataclasses import dataclass
 import threading
@@ -29,6 +30,7 @@ from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 from std_msgs.msg import Empty as EmptyMsg
+from ament_index_python import get_package_share_directory
 
 from rdf_utils.models.common import ModelBase
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
@@ -92,11 +94,22 @@ def load_graph_models_in_yaml(models_yml: str) -> Dataset:
         if model_info["format"] == "robbdd":
             raise ValueError("RobBDD model not yet handled")
 
+        path = model_info.get("path", None)
+        if path is None:
+            raise ValueError(f"no 'path' in model entry: {model_info}")
+        path_type = model_info.get("path_type", None)
+        if path_type == "ros":
+            pkg_name = model_info.get("package_name", None)
+            if pkg_name is None:
+                raise ValueError(f"no 'package_name' specified for ROS path: {path}")
+            pkg_share_path = get_package_share_directory(package_name=pkg_name)
+            path = os.path.join(pkg_share_path, path)
+
         # assuming model can be loaded using rdflib
         try:
-            g.parse(model_info["path"], format=model_info["format"])
+            g.parse(path, format=model_info["format"])
         except Exception as e:
-            raise RuntimeError(f"Caught {e} while processing '{model_info['path']}'")
+            raise RuntimeError(f"Caught {e} while processing '{path}'")
 
     return g
 
