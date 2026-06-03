@@ -46,6 +46,7 @@ from bdd_dsl.representation import (
     get_tmpl_fc_config,
     get_tmpl_fc_is_held,
     get_tmpl_fc_located_at,
+    get_tmpl_fc_str_tmpl,
 )
 from bdd_dsl.models.urirefs import (
     URI_ROS_PRED_TYPE_NAME,
@@ -222,6 +223,7 @@ class BddCoordNode(Node):
                 get_tmpl_fc_is_held,
                 get_tmpl_fc_located_at,
                 get_tmpl_bhv_pickplace,
+                get_tmpl_fc_str_tmpl,
                 lambda model, **kwargs: get_tmpl_fc_config(
                     model, ns_manager=self.graph.namespace_manager, **kwargs
                 ),
