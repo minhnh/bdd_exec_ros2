@@ -18,7 +18,7 @@ from random import random
 
 from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_AGN, URI_BHV_PRED_TARGET_OBJ
 from rdflib import Graph, Namespace, URIRef
-from rdf_utils.uri import URL_SECORO_M
+from rdf_utils.namespace import URL_SECORO_M
 from coord_dsl.fsm import FSMData, consume_event, fsm_step, produce_event
 from coord_dsl.event_loop import reconfig_event_buffers
 
