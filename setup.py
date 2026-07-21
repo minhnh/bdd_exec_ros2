@@ -44,6 +44,7 @@ setup(
     entry_points={
         "console_scripts": [
             "bdd_coordination_node = bdd_exec_ros2.executables.bdd_coordination_node:main",
+            "sim_interface_test = bdd_exec_ros2.executables.sim_interface_test:main",
             "mockup_behaviour_node = bdd_exec_ros2.executables.mockup_behaviour_node:main",
             "visualizer = bdd_exec_ros2.executables.visualizer:main",
         ],

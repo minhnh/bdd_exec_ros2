@@ -9,6 +9,7 @@
 
   <depend>rclpy</depend>
   <depend>bdd_ros2_interfaces</depend>
+  <depend>simulation_interfaces</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_mypy</test_depend>
