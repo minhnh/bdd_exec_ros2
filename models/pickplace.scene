@@ -1,0 +1,3 @@
+ns pp = "https://secorolab.github.io/models/scenes/pickplace/"
+
+scene (ns=pp) pickplace_scene { }
