@@ -12,20 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Optional
 from rclpy.impl.rcutils_logger import RcutilsLogger
-from rdflib import Graph, URIRef
-
 from rclpy.client import Client
 from rclpy.node import Node
 
-from bdd_dsl.models.urirefs import URI_EXEC_PRED_PATH
-from scene_dsl.rdf.scenex import URI_USD_STAGE
+from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
+from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 
-from simulation_interfaces.msg import SimulatorFeatures
-from simulation_interfaces.srv import GetSimulatorFeatures
+from simulation_interfaces.msg import Result, SimulatorFeatures
+from simulation_interfaces.srv import GetSimulatorFeatures, LoadWorld
 
 
 FEATURE_NAMES = {
@@ -35,12 +34,26 @@ FEATURE_NAMES = {
 }
 
 
+class SceneFormat(StrEnum):
+    USD = "usd"
+    URDF = "urdf"
+    MJCF = "mjcf"
+
+
+SUPPORTED_FORMAT_URIS = {
+    SceneFormat.USD: URI_USD_STAGE,
+    SceneFormat.URDF: URI_URDF_ROBOT,
+    SceneFormat.MJCF: URI_MJCF_MUJOCO,
+}
+
+
 class SimInterface:
     ns: str
     timeout: float
 
     _logger: RcutilsLogger
     _node: Node
+    _load_world_srv_client: Client
     _sim_feature_srv_client: Client
     _sim_features: Optional[SimulatorFeatures]
 
@@ -50,6 +63,7 @@ class SimInterface:
         timeout: float = 5.0,
         ns: str = "",
         sim_feature_srv_name: str = "get_simulator_features",
+        load_world_srv_name: str = "load_world",
     ) -> None:
         self.ns = ns
         self.timeout = timeout
@@ -67,6 +81,13 @@ class SimInterface:
             raise TimeoutError(
                 f"Timed out waiting for '{sim_feat_srv_full}' after {self.timeout}s"
             )
+
+        load_world_srv_full = f"{self.ns}/{load_world_srv_name}"
+        self._logger.info(f"Listening to service: {load_world_srv_full}")
+        self._load_world_srv_client = node.create_client(
+            srv_type=LoadWorld,
+            srv_name=load_world_srv_full,
+        )
 
     async def get_sim_features(self, quiet=True) -> Optional[SimulatorFeatures]:
         if self._sim_features is not None:
@@ -89,16 +110,55 @@ class SimInterface:
         self._sim_features = response.features
         return self._sim_features
 
+    async def load_world(self, scene_inst: SceneInstanceModel) -> Path:
+        features = await self.get_sim_features(quiet=False)
+        if features is None or SimulatorFeatures.WORLD_LOADING not in features.features:
+            raise RuntimeError("simulator does not support world loading")
 
-def get_scene_path(graph: Graph, scn_inst_id: URIRef) -> Path:
-    """Read the single USD scene path from a generated Scene DSL graph."""
-    scene = SceneInstanceModel(scn_inst_id=scn_inst_id, graph=graph)
-    resources = [
-        model for model in scene.models.values() if URI_USD_STAGE in model.types
-    ]
-    if len(resources) != 1:
-        raise ValueError(f"expected one USD scene model, found {len(resources)}")
-    path = resources[0].get_attr(URI_EXEC_PRED_PATH)
-    if not isinstance(path, str):
-        raise ValueError("USD scene model has no path")
-    return Path(path).expanduser()
+        if not self._load_world_srv_client.wait_for_service(timeout_sec=self.timeout):
+            raise TimeoutError(
+                f"Timed out waiting for load_world after {self.timeout}s"
+            )
+
+        resource_types = {
+            resource_type
+            for format_name in features.spawn_formats
+            if (resource_type := SUPPORTED_FORMAT_URIS.get(format_name)) is not None
+        }
+        if len(resource_types) < 1:
+            raise RuntimeError(
+                f"unhandled simulator spawn formats: {features.spawn_formats}"
+            )
+
+        resources = [
+            model
+            for model in scene_inst.models.values()
+            if resource_types.intersection(model.types)
+        ]
+        if len(resources) != 1:
+            raise ValueError(
+                f"SceneInstance '{scene_inst.id}': expected one supported scene model format ({features.spawn_formats}),"
+                f" found {len(resources)}"
+            )
+
+        path_str = resources[0].get_attr(URI_EXEC_PRED_PATH)
+        if not isinstance(path_str, str):
+            raise ValueError(f"scene model {resources[0].id} has no path")
+        path = Path(path_str).expanduser()
+
+        request = LoadWorld.Request()
+        request.uri = str(path)
+        future = self._load_world_srv_client.call_async(request)
+        timer = self._node.create_timer(self.timeout, future.cancel)
+        try:
+            response = await future
+        finally:
+            self._node.destroy_timer(timer)
+
+        if response is None:
+            raise TimeoutError(f"load_world timed out after {self.timeout}s")
+        if response.result.result != Result.RESULT_OK:
+            raise RuntimeError(
+                f"load_world failed ({response.result.result}): {response.result.error_message}"
+            )
+        return path

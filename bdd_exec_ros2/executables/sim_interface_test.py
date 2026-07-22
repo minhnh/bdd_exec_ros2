@@ -10,12 +10,13 @@ from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 from rdflib import RDF, URIRef
 from scene_dsl.langs import scenex_metamodel
-from scene_dsl.rdf.scenex import URI_EXEC_TYPE_SCENE_INST, create_scenex_model_graph
+from rdf_utils.models.vocab import URI_EXEC_TYPE_SCENE_INST
+from scene_dsl.rdf.scenex import create_scenex_model_graph
+from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 
 from bdd_exec_ros2.sim_interfaces import (
     FEATURE_NAMES,
     SimInterface,
-    get_scene_path,
 )
 
 
@@ -79,10 +80,16 @@ def main(args=None):
             scene_ids = list(
                 graph.subjects(RDF.type, URI_EXEC_TYPE_SCENE_INST, unique=True)
             )
-            if len(scene_ids) != 1 and not isinstance(scene_ids[0], URIRef):
+            if len(scene_ids) != 1:
                 raise ValueError(f"expected one scene instance URI, found {scene_ids}")
-            path = get_scene_path(graph=graph, scn_inst_id=scene_ids[0])
-            node.get_logger().info(f"Found scene model '{path}'")
+            scn_inst_id = scene_ids[0]
+            assert isinstance(scn_inst_id, URIRef)
+
+            scene = SceneInstanceModel(scn_inst_id=scn_inst_id, graph=graph)
+            task = rclpy.get_global_executor().create_task(sim_intf.load_world(scene))
+            rclpy.spin_until_future_complete(node, task)
+            path = task.result()
+            node.get_logger().info(f"Loaded world {path}")
             return
 
         raise ValueError(f"unhandled command: {options.command}")
