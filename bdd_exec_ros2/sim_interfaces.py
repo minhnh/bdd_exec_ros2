@@ -23,8 +23,13 @@ from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
 from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 
-from simulation_interfaces.msg import Result, SimulatorFeatures
-from simulation_interfaces.srv import GetSimulatorFeatures, LoadWorld
+from simulation_interfaces.msg import Result, SimulationState, SimulatorFeatures
+from simulation_interfaces.srv import (
+    GetSimulationState,
+    GetSimulatorFeatures,
+    LoadWorld,
+    SetSimulationState,
+)
 
 
 FEATURE_NAMES = {
@@ -54,6 +59,8 @@ class SimInterface:
     _logger: RcutilsLogger
     _node: Node
     _load_world_srv_client: Client
+    _get_sim_state_srv_client: Client
+    _set_sim_state_srv_client: Client
     _sim_feature_srv_client: Client
     _sim_features: Optional[SimulatorFeatures]
 
@@ -64,6 +71,8 @@ class SimInterface:
         ns: str = "",
         sim_feature_srv_name: str = "get_simulator_features",
         load_world_srv_name: str = "load_world",
+        get_sim_state_srv_name: str = "get_simulation_state",
+        set_sim_state_srv_name: str = "set_simulation_state",
     ) -> None:
         self.ns = ns
         self.timeout = timeout
@@ -89,6 +98,20 @@ class SimInterface:
             srv_name=load_world_srv_full,
         )
 
+        get_sim_state_srv_full = f"{self.ns}/{get_sim_state_srv_name}"
+        self._logger.info(f"Listening to service: {get_sim_state_srv_full}")
+        self._get_sim_state_srv_client = node.create_client(
+            srv_type=GetSimulationState,
+            srv_name=get_sim_state_srv_full,
+        )
+
+        set_sim_state_srv_full = f"{self.ns}/{set_sim_state_srv_name}"
+        self._logger.info(f"Listening to service: {set_sim_state_srv_full}")
+        self._set_sim_state_srv_client = node.create_client(
+            srv_type=SetSimulationState,
+            srv_name=set_sim_state_srv_full,
+        )
+
     async def get_sim_features(self, quiet=True) -> Optional[SimulatorFeatures]:
         if self._sim_features is not None:
             return self._sim_features
@@ -110,10 +133,80 @@ class SimInterface:
         self._sim_features = response.features
         return self._sim_features
 
+    async def get_sim_state(self) -> SimulationState:
+        features = await self.get_sim_features(quiet=False)
+        if (
+            features is None
+            or SimulatorFeatures.SIMULATION_STATE_GETTING not in features.features
+        ):
+            raise RuntimeError("simulator does not support getting simulation state")
+        if not self._get_sim_state_srv_client.wait_for_service(
+            timeout_sec=self.timeout
+        ):
+            raise TimeoutError(
+                f"Timed out waiting for get_simulation_state after {self.timeout}s"
+            )
+
+        future = self._get_sim_state_srv_client.call_async(GetSimulationState.Request())
+        timer = self._node.create_timer(self.timeout, future.cancel)
+        try:
+            response = await future
+        finally:
+            self._node.destroy_timer(timer)
+
+        if response is None:
+            raise TimeoutError(f"get_simulation_state timed out after {self.timeout}s")
+        if response.result.result != Result.RESULT_OK:
+            raise RuntimeError(
+                f"get_simulation_state failed ({response.result.result}): "
+                f"{response.result.error_message}"
+            )
+        return response.state
+
+    async def set_sim_state(self, state: SimulationState) -> None:
+        features = await self.get_sim_features(quiet=False)
+        if (
+            features is None
+            or SimulatorFeatures.SIMULATION_STATE_SETTING not in features.features
+        ):
+            raise RuntimeError("simulator does not support setting simulation state")
+        if not self._set_sim_state_srv_client.wait_for_service(
+            timeout_sec=self.timeout
+        ):
+            raise TimeoutError(
+                f"Timed out waiting for set_simulation_state after {self.timeout}s"
+            )
+
+        request = SetSimulationState.Request()
+        request.state = state
+        future = self._set_sim_state_srv_client.call_async(request)
+        timer = self._node.create_timer(self.timeout, future.cancel)
+        try:
+            response = await future
+        finally:
+            self._node.destroy_timer(timer)
+
+        if response is None:
+            raise TimeoutError(f"set_simulation_state timed out after {self.timeout}s")
+        if response.result.result not in (
+            Result.RESULT_OK,
+            SetSimulationState.Response.ALREADY_IN_TARGET_STATE,
+        ):
+            raise RuntimeError(
+                f"set_simulation_state failed ({response.result.result}): "
+                f"{response.result.error_message}"
+            )
+
     async def load_world(self, scene_inst: SceneInstanceModel) -> Path:
         features = await self.get_sim_features(quiet=False)
         if features is None or SimulatorFeatures.WORLD_LOADING not in features.features:
             raise RuntimeError("simulator does not support world loading")
+
+        state = await self.get_sim_state()
+        if state.state == SimulationState.STATE_PLAYING:
+            await self.set_sim_state(
+                SimulationState(state=SimulationState.STATE_STOPPED)
+            )
 
         if not self._load_world_srv_client.wait_for_service(timeout_sec=self.timeout):
             raise TimeoutError(
