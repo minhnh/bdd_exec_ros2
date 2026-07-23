@@ -1,96 +1,77 @@
 ns tmpl = "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/"
 
-FSM (ns=tmpl) pickplace {
-DESCRIPTION: "Example of a simple FSM for pick-place application"
+evt loop (ns=tmpl) el {
+    evt evt-perceive-done,
+    evt evt-pick-start,
+    evt evt-pick-approach-done,
+    evt evt-place-start,
+    evt evt-place-approach-done,
+    evt evt-pick-end,
+    evt evt-place-end,
+    evt evt-step
+}
 
-STATES: S_START,S_PERCEIVE,S_APPROACH,S_PICK,S_PLACE,S_EXIT
+fsm (ns=tmpl) pickplace {
+    description: "Example of a simple FSM for pick-place application"
 
-START_STATE: @S_START
-END_STATE: @S_EXIT
+    states {
+        S_START,
+        S_PERCEIVE,
+        S_APPROACH,
+        S_PICK,
+        S_PLACE,
+        S_EXIT
+    }
 
-EVENTS:
-    evt-perceive-done,
-    evt-pick-start,
-    evt-pick-approach-done,
-    evt-place-start,
-    evt-place-approach-done,
-    evt-pick-end,
-    evt-place-end,
-    evt-step
+    evt loop: <el>
 
-TRANSITIONS:
-    T_START_PERCEIVE:
-        FROM: @S_START
-        TO: @S_PERCEIVE
-    T_PERCEIVE_PERCEIVE:
-        FROM: @S_PERCEIVE
-        TO: @S_PERCEIVE
-    T_PERCEIVE_APPROACH:
-        FROM: @S_PERCEIVE
-        TO: @S_APPROACH
-    T_APPROACH_APPROACH:
-        FROM: @S_APPROACH
-        TO: @S_APPROACH
-    T_APPROACH_PICK:
-        FROM: @S_APPROACH
-        TO: @S_PICK
-    T_PICK_PICK:
-        FROM: @S_PICK
-        TO: @S_PICK
-    T_PICK_APPROACH:
-        FROM: @S_PICK
-        TO: @S_APPROACH
-    T_APPROACH_PLACE:
-        FROM: @S_APPROACH
-        TO: @S_PLACE
-    T_PLACE_PLACE:
-        FROM: @S_PLACE
-        TO: @S_PLACE
-    T_PERCEIVE_EXIT:
-        FROM: @S_PERCEIVE
-        TO: @S_EXIT
-    T_APPROACH_EXIT:
-        FROM: @S_APPROACH
-        TO: @S_EXIT
-    T_PICK_EXIT:
-        FROM: @S_PICK
-        TO: @S_EXIT
-    T_PLACE_EXIT:
-        FROM: @S_PLACE
-        TO: @S_EXIT
+    start: <S_START>
+    end:   <S_EXIT>
 
-REACTIONS:
-    R_E_PERCEIVE_DONE:
-        WHEN: @evt-perceive-done
-        DO: @T_PERCEIVE_APPROACH
-        FIRES: @evt-pick-start
-    R_E_PICK_APPROACH_DONE:
-        WHEN: @evt-pick-approach-done
-        DO: @T_APPROACH_PICK
-    R_E_PLACE_APPROACH_DONE:
-        WHEN: @evt-place-approach-done
-        DO: @T_APPROACH_PLACE
-    R_E_PICK_DONE:
-        WHEN: @evt-pick-end
-        DO: @T_PICK_APPROACH
-        FIRES: @evt-place-start
-    R_E_PLACE_DONE:
-        WHEN: @evt-place-end
-        DO: @T_PLACE_EXIT
+    transitions {
+        T_START_PERCEIVE       { from: <S_START>,    to: <S_PERCEIVE> },
+        T_PERCEIVE_PERCEIVE    { from: <S_PERCEIVE>, to: <S_PERCEIVE> },
+        T_PERCEIVE_APPROACH    { from: <S_PERCEIVE>, to: <S_APPROACH> },
+        T_APPROACH_APPROACH    { from: <S_APPROACH>, to: <S_APPROACH> },
+        T_APPROACH_PICK        { from: <S_APPROACH>, to: <S_PICK> },
+        T_PICK_PICK            { from: <S_PICK>,     to: <S_PICK> },
+        T_PICK_APPROACH        { from: <S_PICK>,     to: <S_APPROACH> },
+        T_APPROACH_PLACE       { from: <S_APPROACH>, to: <S_PLACE> },
+        T_PLACE_PLACE          { from: <S_PLACE>,    to: <S_PLACE> },
+        T_PERCEIVE_EXIT        { from: <S_PERCEIVE>, to: <S_EXIT> },
+        T_APPROACH_EXIT        { from: <S_APPROACH>, to: <S_EXIT> },
+        T_PICK_EXIT            { from: <S_PICK>,     to: <S_EXIT> },
+        T_PLACE_EXIT           { from: <S_PLACE>,    to: <S_EXIT> }
+    }
 
-    R_E_STEP_START:
-        WHEN: @evt-step
-        DO: @T_START_PERCEIVE
-    R_E_STEP_PERCEIVE:
-        WHEN: @evt-step
-        DO: @T_PERCEIVE_PERCEIVE
-    R_E_STEP_APPROACH:
-        WHEN: @evt-step
-        DO: @T_APPROACH_APPROACH
-    R_E_STEP_PICK:
-        WHEN: @evt-step
-        DO: @T_PICK_PICK
-    R_E_STEP_PLACE:
-        WHEN: @evt-step
-        DO: @T_PLACE_PLACE
+    reactions {
+        R_E_PERCEIVE_DONE {
+            when: <el.evt-perceive-done>,
+            do: <T_PERCEIVE_APPROACH>,
+            fires { <el.evt-pick-start> }
+        },
+        R_E_PICK_APPROACH_DONE {
+            when: <el.evt-pick-approach-done>,
+            do: <T_APPROACH_PICK>
+        },
+        R_E_PLACE_APPROACH_DONE {
+            when: <el.evt-place-approach-done>,
+            do: <T_APPROACH_PLACE>
+        },
+        R_E_PICK_DONE {
+            when: <el.evt-pick-end>,
+            do: <T_PICK_APPROACH>,
+            fires { <el.evt-place-start> }
+        },
+        R_E_PLACE_DONE {
+            when: <el.evt-place-end>,
+            do: <T_PLACE_EXIT>
+        },
+
+        R_E_STEP_START    { when: <el.evt-step>, do: <T_START_PERCEIVE> },
+        R_E_STEP_PERCEIVE { when: <el.evt-step>, do: <T_PERCEIVE_PERCEIVE> },
+        R_E_STEP_APPROACH { when: <el.evt-step>, do: <T_APPROACH_APPROACH> },
+        R_E_STEP_PICK     { when: <el.evt-step>, do: <T_PICK_PICK> },
+        R_E_STEP_PLACE    { when: <el.evt-step>, do: <T_PLACE_PLACE> }
+    }
 }

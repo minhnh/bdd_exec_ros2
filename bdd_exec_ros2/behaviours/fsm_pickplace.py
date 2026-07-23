@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """
 This is an auto-generated file. Do not edit it directly.
 
@@ -92,6 +91,11 @@ class ReactionID(IntEnum):
 
 
 # URI mappings
+#: This FSM's own IRI; the tables below name its parts.
+FSM_URI: str = (
+    "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/pickplace"
+)
+
 STATE_URIS: dict[StateID, str] = {
     StateID.S_START: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/S_START",
     StateID.S_PERCEIVE: "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/S_PERCEIVE",
