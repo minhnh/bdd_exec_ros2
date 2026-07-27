@@ -1,0 +1,38 @@
+ns lab_env='https://secorolab.github.io/models/environments/secorolab/'
+ns isaac_agn='https://secorolab.github.io/models/agents/isaac-sim/'
+ns scene_lab='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab/'
+ns scene_lab_mjc='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab-mjc/'
+
+obj set (ns=lab_env) pickplace_objects {
+    object object1,
+    object object2,
+    object object3
+}
+obj set (ns=lab_env) workspace_objects {
+    object table,
+    object box1,
+    object box2
+}
+ws set (ns=lab_env) box_workspaces {
+    workspace box1,
+    workspace box2
+}
+ws set (ns=lab_env) table_workspaces {
+    workspace table
+}
+agn set (ns=isaac_agn) isaac_agents {
+    agent panda
+}
+
+comp (ns=lab_env) comp_box1 of ws <box_workspaces.box1> { obj <workspace_objects.box1> }
+comp (ns=lab_env) comp_box2 of ws <box_workspaces.box2> { obj <workspace_objects.box2> }
+comp (ns=lab_env) comp_table of ws <table_workspaces.table> {
+    obj <workspace_objects.table>
+    ws comp <comp_box1>
+    ws comp <comp_box2>
+}
+
+scene (ns=scene_lab) pickplace_scene {
+    obj set <pickplace_objects>
+    ws comp <comp_table>
+}

@@ -1,0 +1,8 @@
+import "lab.scene"
+
+scene inst (ns=scene_lab_mjc) pickplace_scene_mjc {
+    scene: <pickplace_scene>
+    model pickplace-mjc as mjcf {
+        sys path = '~/.cache/mj_kdl_wrapper/assets/pickplace.xml'
+    }
+}
