@@ -1,0 +1,52 @@
+import "lab.scene"
+
+ns bdd_var='https://secorolab.github.io/models/acceptance-criteria/bdd/variants/pickplace-isaac/'
+ns bdd_tmpl='https://secorolab.github.io/models/acceptance-criteria/bdd/templates/'
+
+Task (ns=bdd_tmpl) tsk_pickplace
+Event (ns=bdd_tmpl) evt-scr-start
+Event (ns=bdd_tmpl) evt-scr-end
+Event (ns=bdd_tmpl) evt-pick-start
+Event (ns=bdd_tmpl) evt-place-end
+
+Scenario Template (ns=bdd_tmpl) tmpl_pickplace {
+    duration: from <evt-scr-start> until <evt-scr-end>
+    task: <tsk_pickplace>
+
+    var target_object
+    var robot
+    var pick_ws
+    var place_ws
+
+    Given:
+        fc-located-before: holds(
+            <target_object> is located at <pick_ws>, 2 seconds before <evt-pick-start>
+        )
+    When:
+        Behaviour (ns=bdd_tmpl) pickplace {
+            duration: from <evt-pick-start> until <evt-place-end>
+            <robot> picks <target_object> and places at <place_ws>
+        }
+    Then:
+        fc-located-after: holds(
+            <target_object> is located at <place_ws>, 2 seconds after <evt-place-end>
+        )
+}
+
+User Story (ns=bdd_var) sim_pickplace {
+    As A "Function Developer"
+    I Want "Pick and place behaviour"
+    So That "I can transport objects"
+
+    Scenarios:
+        Scenario pickplace_table {
+            template: <tmpl_pickplace>
+            scene: <pickplace_scene>
+
+            variation:
+                var <tmpl_pickplace.target_object>: obj set <pickplace_objects>
+                var <tmpl_pickplace.pick_ws>: { <table_workspaces.table> }
+                var <tmpl_pickplace.place_ws>: ws set <box_workspaces>
+                var <tmpl_pickplace.robot>: { <isaac_agents.panda> }
+        }
+}

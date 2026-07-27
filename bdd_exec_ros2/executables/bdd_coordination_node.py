@@ -18,7 +18,7 @@ import os
 from uuid import UUID, uuid4
 from dataclasses import dataclass
 import threading
-from rdflib import Dataset, URIRef
+from rdflib import Graph, URIRef
 
 import rclpy
 from rclpy.action.client import ClientGoalHandle, ActionClient
@@ -80,7 +80,7 @@ def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
     return not any(context_id.uuid)
 
 
-def load_graph_models_in_yaml(models_yml: str) -> Dataset:
+def load_graph_models_in_yaml(models_yml: str) -> Graph:
     from pathlib import Path
     import yaml
     from rdf_utils.resolver import install_resolver
@@ -96,11 +96,8 @@ def load_graph_models_in_yaml(models_yml: str) -> Dataset:
 
     install_resolver()
 
-    g = Dataset()
+    g = Graph()
     for model_info in models_list:
-        if model_info["format"] == "robbdd":
-            raise ValueError("RobBDD model not yet handled")
-
         path = model_info.get("path", None)
         if path is None:
             raise ValueError(f"no 'path' in model entry: {model_info}")
@@ -111,6 +108,25 @@ def load_graph_models_in_yaml(models_yml: str) -> Dataset:
                 raise ValueError(f"no 'package_name' specified for ROS path: {path}")
             pkg_share_path = get_package_share_directory(package_name=pkg_name)
             path = os.path.join(pkg_share_path, path)
+
+        if model_info["format"] == "robbdd":
+            from textx import metamodel_for_file
+            from textx.registration import language_for_file
+            from robbdd.rdf.bdd import create_bdd_model_graph
+            from robbdd.rdf.bddx import create_bddx_model_graph
+
+            model = metamodel_for_file(path).model_from_file(path)
+            lang = language_for_file(path).name
+
+            if lang == "robbdd":
+                create_bdd_model_graph(model=model, g=g)
+            elif lang == "robbdd-exec":
+                create_bddx_model_graph(model=model, g=g)
+            else:
+                raise ValueError(
+                    f"unsupported language '{lang}' for RobBDD model '{path}'"
+                )
+            continue
 
         # assuming model can be loaded using rdflib
         try:
@@ -135,7 +151,7 @@ class ScenarioContext:
 
 class BddCoordNode(Node):
     timeout_sec: float
-    graph: Dataset
+    graph: Graph
     us_loader: UserStoryLoader
 
     _scenario_contexts: dict[UUID, ScenarioContext]
