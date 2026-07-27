@@ -51,6 +51,11 @@ from bdd_ros2_interfaces.msg import (
 
 
 S_TO_NS: Final = 1000 * 1000 * 1000
+TRINARY_NAMES = {
+    TrinaryMsg.TRUE: "TRUE",
+    TrinaryMsg.FALSE: "FALSE",
+    TrinaryMsg.UNKNOWN: "UNKNOWN",
+}
 
 
 def ros_time_to_stamp(t: Time) -> float:
