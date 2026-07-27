@@ -21,8 +21,7 @@ import threading
 from rdflib import Dataset, URIRef
 
 import rclpy
-from rclpy.action import ActionClient
-from rclpy.action.client import ClientGoalHandle
+from rclpy.action.client import ClientGoalHandle, ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.publisher import Publisher
@@ -30,6 +29,7 @@ from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 from std_msgs.msg import Empty as EmptyMsg
+from unique_identifier_msgs.msg import UUID as UUIDMsg
 from ament_index_python import get_package_share_directory
 
 from rdf_utils.models.common import ModelBase
@@ -60,6 +60,8 @@ from bdd_ros2_interfaces.msg import (
     TrinaryStamped,
 )
 from bdd_exec_ros2.conversions import (
+    TRINARY_NAMES,
+    format_time_msg,
     from_trin_stamped_msg,
     from_uuid_msg,
     get_cfg_messages,
@@ -72,6 +74,10 @@ from bdd_exec_ros2.observation import load_ros_action_model, load_ros_topic_mode
 
 
 __DEFAULT_NODE_NAME = "test_coordinator"
+
+
+def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
+    return not any(context_id.uuid)
 
 
 def load_graph_models_in_yaml(models_yml: str) -> Dataset:
@@ -175,6 +181,10 @@ class BddCoordNode(Node):
 
         # Test starting topic
         start_test_topic = self.get_parameter("start_test_topic").value
+        if not isinstance(start_test_topic, str):
+            raise TypeError(
+                f"expected str for 'start_test_topic' param, got: {type(start_test_topic)}"
+            )
         self.get_logger().info(f"Start topic: {start_test_topic}")
         self._start_test_sub = self.create_subscription(
             msg_type=EmptyMsg,
@@ -202,7 +212,15 @@ class BddCoordNode(Node):
 
         # Timer & publisher for broadcasting scenario status
         status_topic = self.get_parameter("status_topic").value
+        if not isinstance(status_topic, str):
+            raise TypeError(
+                f"expected str for 'status_topic' param, got: {type(status_topic)}"
+            )
         timer_period = self.get_parameter("status_timer_period").value
+        if not isinstance(timer_period, float):
+            raise TypeError(
+                f"expected float for 'timer_period' param, got: {type(timer_period)}"
+            )
         self.timer = self.create_timer(timer_period, self._status_timer_callback)
         self._scr_status_pub = self.create_publisher(
             msg_type=ScenarioStatusList, topic=status_topic, qos_profile=10
@@ -210,6 +228,10 @@ class BddCoordNode(Node):
 
         # Load model graph
         g_models_yml = self.get_parameter("graph_models").value
+        if not isinstance(g_models_yml, str):
+            raise TypeError(
+                f"expected str 'graph_models' file name param, got: {type(g_models_yml)}"
+            )
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
@@ -256,29 +278,52 @@ class BddCoordNode(Node):
             f"no policy registered for topic: {topic_name}"
         )
 
+        forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
         trin_st, ctx_uuid = from_trin_stamped_msg(msg)
 
         with self._scr_lock:
-            if ctx_uuid not in self._scenario_contexts:
+            trin_val = msg.trinary.value
+            if trin_val not in TRINARY_NAMES:
+                trin_rep = f"{trin_val} ({format_time_msg(msg=msg.stamp)})"
                 self.get_logger().error(
-                    f"Trinary update from {topic_name}: Scenario context '{ctx_uuid.hex}' not found"
+                    f"Policy assertion callback: no name found for trinary value [{trin_rep}]"
+                )
+            else:
+                trin_rep = (
+                    f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=msg.stamp)})"
+                )
+
+            if forward_to_all:
+                self.get_logger().warning(
+                    f"Trinary [{trin_rep}] from {topic_name} has no scenario context; forwarding to all active scenarios"
+                )
+                context_ids = tuple(self._scenario_contexts)
+            elif ctx_uuid not in self._scenario_contexts:
+                self.get_logger().error(
+                    f"Trinary [{trin_rep}] from {topic_name}: Scenario context '{ctx_uuid.hex}' not found"
                 )
                 return
+            else:
+                self.get_logger().info(f"received trinary [{trin_rep}]")
+                context_ids = (ctx_uuid,)
 
-            if ctx_uuid not in self._topic_fpolicy_reg[topic_name]:
-                self.get_logger().error(
-                    f"Trinary update from {topic_name}: No fluent policy registered for context '{ctx_uuid.hex}'"
-                )
-                return
-
-            ctx = self._scenario_contexts[ctx_uuid]
-            policies = self._topic_fpolicy_reg[topic_name][ctx_uuid]
-            for fpolicy_uri in policies:
-                updated, reason = ctx.obs_manager.update_fpolicy_assertion(
-                    policy_uri=fpolicy_uri, trin_st=trin_st
-                )
-                if not updated:
-                    self.get_logger().warning(f"trinary not added: {reason}")
+            for context_id in context_ids:
+                if context_id not in self._topic_fpolicy_reg[topic_name]:
+                    if not forward_to_all:
+                        self.get_logger().error(
+                            f"Trinary [{trin_rep}] from {topic_name}: No fluent policy registered for context '{context_id.hex}'"
+                        )
+                    continue
+                ctx = self._scenario_contexts[context_id]
+                policies = self._topic_fpolicy_reg[topic_name][context_id]
+                for fpolicy_uri in policies:
+                    updated, reason = ctx.obs_manager.update_fpolicy_assertion(
+                        policy_uri=fpolicy_uri, trin_st=trin_st
+                    )
+                    if not updated:
+                        self.get_logger().warning(
+                            f"Trinary [{trin_rep}] not added: {reason}"
+                        )
 
     def _create_subscription(self, model: ModelBase, context_id: UUID):
         if URI_ROS_TYPE_TOPIC not in model.types:
@@ -419,22 +464,33 @@ class BddCoordNode(Node):
                     )
 
     def evt_sub_cb(self, msg: Event):
-        self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
         evt_uri = URIRef(msg.uri)
         evt_t = ros_time_to_stamp(Time.from_msg(msg.stamp))
+        forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
         evt_ctx_uuid = from_uuid_msg(msg.scenario_context_id)
         with self._scr_lock:
-            if evt_ctx_uuid not in self._scenario_contexts:
+            evt_rep = f"{self.graph.namespace_manager.curie(msg.uri)} ({format_time_msg(msg=msg.stamp)})"
+            self.get_logger().info(f"received event [{evt_rep}]")
+
+            if forward_to_all:
+                self.get_logger().warning(
+                    f"Event [{evt_rep}] has no scenario context; forwarding to all active scenarios"
+                )
+                context_ids = tuple(self._scenario_contexts)
+            elif evt_ctx_uuid not in self._scenario_contexts:
                 self.get_logger().error(
-                    f"Callback for event '{msg.uri}': Scenario context '{evt_ctx_uuid.hex}' not found"
+                    f"Callback for event [{evt_rep}]: Scenario context '{evt_ctx_uuid.hex}' not found"
                 )
                 return
+            else:
+                context_ids = (evt_ctx_uuid,)
 
-            ctx = self._scenario_contexts[evt_ctx_uuid]
-            try:
-                ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
-            except ValueError as e:
-                self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
+            for context_id in context_ids:
+                ctx = self._scenario_contexts[context_id]
+                try:
+                    ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
+                except ValueError as e:
+                    self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
 
     def bhv_goal_resp_cb(self, future, context_id: UUID):
         goal_handle = future.result()
@@ -469,11 +525,18 @@ class BddCoordNode(Node):
         result_uuid = from_uuid_msg(result.result.scenario_context_id)
         if context_id != result_uuid:
             self.get_logger().error(
-                f"Result callback: context ID doesn't match {context_id.hex} != {result_uuid.hex}"
+                f"Behaviour result callback: context ID doesn't match {context_id.hex} != {result_uuid.hex}"
             )
-        self.get_logger().info(
-            f"Result received for {context_id.hex}: {result.result.trinary.value}"
-        )
+
+        trin_val = result.result.trinary.value
+        if trin_val not in TRINARY_NAMES:
+            self.get_logger().error(
+                f"Behaviour result callback: invalid trinary value '{trin_val}' for '{context_id.hex}'"
+            )
+        else:
+            self.get_logger().info(
+                f"Result received for {context_id.hex}: {TRINARY_NAMES[result.result.trinary.value]}"
+            )
 
         with self._scr_lock:
             if context_id not in self._scenario_contexts:

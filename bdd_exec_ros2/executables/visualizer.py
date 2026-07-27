@@ -46,7 +46,12 @@ from bdd_ros2_interfaces.msg import (
     Trinary as TrinaryMsg,
     TrinaryStamped,
 )
-from bdd_exec_ros2.conversions import format_time_msg, from_uuid_msg, ros_time_to_stamp
+from bdd_exec_ros2.conversions import (
+    TRINARY_NAMES,
+    format_time_msg,
+    from_uuid_msg,
+    ros_time_to_stamp,
+)
 
 
 class ColumnIdx(Enum):
@@ -68,17 +73,20 @@ COLUMN_NAMES = {
 }
 
 TRIN_COLORS = {
-    TrinaryMsg.TRUE: ("TRUE", QColor("darkgreen")),
-    TrinaryMsg.FALSE: ("FALSE", QColor("red")),
-    TrinaryMsg.UNKNOWN: ("UNKNOWN", QColor("darkorange")),
+    TrinaryMsg.TRUE: QColor("darkgreen"),
+    TrinaryMsg.FALSE: QColor("red"),
+    TrinaryMsg.UNKNOWN: QColor("darkorange"),
 }
 
 
 def get_trinary_style(value) -> tuple[str, QColor]:
     if value not in TRIN_COLORS:
-        raise ValueError(f"Invalid trinary value: {value}")
+        raise ValueError(f"No color for trinary value: {value}")
 
-    return TRIN_COLORS[value]
+    if value not in TRINARY_NAMES:
+        raise ValueError(f"No name for trinary value: {value}")
+
+    return TRINARY_NAMES[value], TRIN_COLORS[value]
 
 
 def create_new_scr_item(

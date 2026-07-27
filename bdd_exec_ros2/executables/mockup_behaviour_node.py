@@ -24,7 +24,7 @@ from coord_dsl.event_loop import reconfig_event_buffers
 
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionServer, CancelResponse
+from rclpy.action.server import ActionServer, CancelResponse
 from rclpy.executors import ExternalShutdownException
 
 from bdd_ros2_interfaces.msg import Event, Trinary, TrinaryStamped
