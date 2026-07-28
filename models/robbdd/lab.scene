@@ -1,7 +1,7 @@
 ns lab_env='https://secorolab.github.io/models/environments/secorolab/'
 ns isaac_agn='https://secorolab.github.io/models/agents/isaac-sim/'
 ns scene_lab='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab/'
-ns scene_lab_mjc='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab-mjc/'
+ns scene_lab_isaac='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab-isaacsim/'
 
 obj set (ns=lab_env) pickplace_objects {
     object object1,

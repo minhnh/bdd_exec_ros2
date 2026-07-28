@@ -1,8 +1,44 @@
 import "lab.scene"
 
-scene inst (ns=scene_lab_mjc) pickplace_scene_mjc {
+scene inst (ns=scene_lab_isaac) pickplace_scene_mjc {
     scene: <pickplace_scene>
+    kgraph (ns=scene_lab_isaac) pickplace_graph {
+        body world { frame root { } }
+        body table {
+            frame legs {
+                pose in_world { wrt: <world.root> xyz: (0.0, 0.0, -0.7696) m orientation: euler { angles: (0.0, 0.0, 0.0) } }
+            }
+            frame surface {
+                pose surface_from_legs { xyz: (0.0, 0.0, 0.7696) m orientation: euler { angles: (0.0, 0.0, 0.0) } }
+            }
+            inertia { frame: <surface> }
+        }
+        body box1 {
+            frame center {
+                pose on_table { wrt: <table.surface> xyz: (-0.4, 0.0, 0.1) m orientation: euler { angles: (0.0, 0.0, 0.0) } }
+            }
+        }
+        body box2 {
+            frame center {
+                pose on_table { wrt: <table.surface> xyz: (0.4, 0.0, 0.1) m orientation: euler { angles: (0.0, 0.0, 0.0) } }
+            }
+        }
+    }
     model pickplace-mjc as usd {
         ros pkg = "bdd_exec_ros2", path = "models/panda_moveit.usd"
+        map body <pickplace_graph.table> to "/background/table_low_327"
+    }
+
+    obj <workspace_objects.box1> {
+        model box1-usd as usd {
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
+            map body <pickplace_graph.box1>
+        }
+    }
+    obj <workspace_objects.box2> {
+        model box2-usd as usd {
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
+            map body <pickplace_graph.box2>
+        }
     }
 }
