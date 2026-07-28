@@ -34,6 +34,12 @@ To run the mockup setup:
     ros2 run bdd_exec_ros2 visualizer
     ```
 
+    When status timestamps use the simulated `/clock`, run the visualizer with ROS time enabled:
+
+    ```bash
+    ros2 run bdd_exec_ros2 visualizer --ros-args -p use_sim_time:=true
+    ```
+
 1. Trigger test execution:
 
     ```bash

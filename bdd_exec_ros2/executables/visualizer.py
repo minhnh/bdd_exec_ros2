@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Minh Nguyen
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,13 +11,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import sys
-import signal
 import argparse
-from typing import Optional
+import signal
+import sys
 import uuid
 from enum import Enum, auto
 
+import rclpy
+from bdd_ros2_interfaces.msg import (
+    BehaviourStatus,
+    FluentStatus,
+    ScenarioStatus,
+    ScenarioStatusList,
+    TrinaryStamped,
+)
+from bdd_ros2_interfaces.msg import (
+    Trinary as TrinaryMsg,
+)
 from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
@@ -27,25 +35,16 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
-    QStyledItemDelegate,
     QStyle,
+    QStyledItemDelegate,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
-
-import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 
-from bdd_ros2_interfaces.msg import (
-    BehaviourStatus,
-    FluentStatus,
-    ScenarioStatus,
-    ScenarioStatusList,
-    Trinary as TrinaryMsg,
-    TrinaryStamped,
-)
 from bdd_exec_ros2.conversions import (
     TRINARY_NAMES,
     format_time_msg,
@@ -96,7 +95,7 @@ def create_new_scr_item(
 
     scr_item.setText(
         ColumnIdx.SCENARIO_FLUENT.value,
-        f"Scenario: {scr_rep} - {str(ctx_id.hex[:8])}...",
+        f"Scenario: {scr_rep} - {ctx_id.hex[:8]!s}...",
     )
     scr_item.setExpanded(True)
     f = scr_item.font(ColumnIdx.SCENARIO_FLUENT.value)
@@ -106,24 +105,31 @@ def create_new_scr_item(
     return scr_item
 
 
-def update_scr_item_view(scr_item: QTreeWidgetItem, scr_status: ScenarioStatus) -> bool:
+def update_scr_item_view(
+    scr_item: QTreeWidgetItem, scr_status: ScenarioStatus, use_sim_time: bool = False
+) -> bool:
     # result
     txt, color = get_trinary_style(scr_status.result.trinary.value)
     scr_item.setText(ColumnIdx.RESULT.value, txt)
     scr_item.setForeground(ColumnIdx.RESULT.value, QBrush(color))
     scr_item.setText(
-        ColumnIdx.RESULT_TIME.value, format_time_msg(scr_status.result.stamp)
+        ColumnIdx.RESULT_TIME.value,
+        format_time_msg(scr_status.result.stamp, use_sim_time=use_sim_time),
     )
 
     # start/end time
     if scr_status.start_time.sec > 0:
         scr_item.setText(
-            ColumnIdx.START_TIME.value, format_time_msg(scr_status.start_time)
+            ColumnIdx.START_TIME.value,
+            format_time_msg(scr_status.start_time, use_sim_time=use_sim_time),
         )
 
     finished = False
     if scr_status.end_time.sec > 0:
-        scr_item.setText(ColumnIdx.END_TIME.value, format_time_msg(scr_status.end_time))
+        scr_item.setText(
+            ColumnIdx.END_TIME.value,
+            format_time_msg(scr_status.end_time, use_sim_time=use_sim_time),
+        )
         finished = True
 
     return finished
@@ -136,7 +142,9 @@ def create_new_clause_item(scr_item: QTreeWidgetItem, rep: str):
     return fl_item
 
 
-def update_fluent_item_view(fl_item: QTreeWidgetItem, fl_status: FluentStatus):
+def update_fluent_item_view(
+    fl_item: QTreeWidgetItem, fl_status: FluentStatus, use_sim_time: bool = False
+):
     trinary_values = [t.trinary.value for t in fl_status.trinaries]
     fl_item.setData(ColumnIdx.DETAILS.value, Qt.UserRole, trinary_values)
 
@@ -147,31 +155,42 @@ def update_fluent_item_view(fl_item: QTreeWidgetItem, fl_status: FluentStatus):
     fl_item.setText(ColumnIdx.RESULT.value, txt)
     fl_item.setForeground(ColumnIdx.RESULT.value, QBrush(color))
     fl_item.setText(
-        ColumnIdx.RESULT_TIME.value, format_time_msg(fl_status.result.stamp)
+        ColumnIdx.RESULT_TIME.value,
+        format_time_msg(fl_status.result.stamp, use_sim_time=use_sim_time),
     )
 
     # start/end time
     if fl_status.start_time.sec > 0:
         fl_item.setText(
-            ColumnIdx.START_TIME.value, format_time_msg(fl_status.start_time)
+            ColumnIdx.START_TIME.value,
+            format_time_msg(fl_status.start_time, use_sim_time=use_sim_time),
         )
 
     if fl_status.end_time.sec > 0:
-        fl_item.setText(ColumnIdx.END_TIME.value, format_time_msg(fl_status.end_time))
+        fl_item.setText(
+            ColumnIdx.END_TIME.value,
+            format_time_msg(fl_status.end_time, use_sim_time=use_sim_time),
+        )
 
 
-def update_bhv_item_view(bhv_item: QTreeWidgetItem, bhv_status: BehaviourStatus):
+def update_bhv_item_view(
+    bhv_item: QTreeWidgetItem, bhv_status: BehaviourStatus, use_sim_time: bool = False
+):
     trin_val = bhv_status.result.trinary.value
     txt, color = get_trinary_style(trin_val)
     bhv_item.setText(ColumnIdx.RESULT.value, txt)
     bhv_item.setForeground(ColumnIdx.RESULT.value, QBrush(color))
     bhv_item.setText(
-        ColumnIdx.RESULT_TIME.value, format_time_msg(bhv_status.result.stamp)
+        ColumnIdx.RESULT_TIME.value,
+        format_time_msg(bhv_status.result.stamp, use_sim_time=use_sim_time),
     )
 
 
 def create_new_trin_item(
-    fl_item: QTreeWidgetItem, trin_id: int, trin_msg: TrinaryStamped
+    fl_item: QTreeWidgetItem,
+    trin_id: int,
+    trin_msg: TrinaryStamped,
+    use_sim_time: bool = False,
 ) -> QTreeWidgetItem:
     trin_item = QTreeWidgetItem(fl_item)
     trin_item.setText(ColumnIdx.SCENARIO_FLUENT.value, f"Change #{trin_id}")
@@ -181,13 +200,17 @@ def create_new_trin_item(
     h_txt, h_color = get_trinary_style(h_val)
     trin_item.setText(ColumnIdx.RESULT.value, h_txt)
     trin_item.setForeground(ColumnIdx.RESULT.value, QBrush(h_color))
-    trin_item.setText(ColumnIdx.RESULT_TIME.value, format_time_msg(trin_msg.stamp))
+    trin_item.setText(
+        ColumnIdx.RESULT_TIME.value,
+        format_time_msg(trin_msg.stamp, use_sim_time=use_sim_time),
+    )
 
     return trin_item
 
 
 class RosWorker(QThread):
     message_received = Signal(object)
+    sim_time_changed = Signal(bool)
 
     def __init__(self, topic_name, context_args=None):
         super().__init__()
@@ -203,6 +226,7 @@ class RosWorker(QThread):
         # Create a unique node name to allow running multiple viz instances
         node_name = f"bdd_viz_{uuid.uuid4().hex[:8]}"
         self._node = rclpy.create_node(node_name)
+        self.sim_time_changed.emit(bool(self._node.get_parameter("use_sim_time").value))
         self._node.get_logger().info(f"Subscribing to: {self.topic_name}")
 
         self._sub = self._node.create_subscription(
@@ -211,7 +235,7 @@ class RosWorker(QThread):
 
         try:
             rclpy.spin(self._node)
-        except Exception:
+        except (KeyboardInterrupt, ExternalShutdownException):
             pass
         finally:
             self.stop()
@@ -230,7 +254,7 @@ class TrinaryHistoryDelegate(QStyledItemDelegate):
     _square_size: int
     _spacing: int
 
-    def __init__(self, parent=None, font_size: Optional[int] = None):
+    def __init__(self, parent=None, font_size: int | None = None):
         super().__init__(parent)
         if font_size is None:
             self._square_size = 12
@@ -282,7 +306,7 @@ class BddVisualizer(QMainWindow):
         status_topic: str,
         width: int,
         height: int,
-        font_size: Optional[int],
+        font_size: int | None,
         ros_args,
     ):
         super().__init__()
@@ -328,15 +352,23 @@ class BddVisualizer(QMainWindow):
         layout.addWidget(self.tree)
 
         self._scenario_items = {}
+        self.use_sim_time = False
 
         self.ros_thread = RosWorker(status_topic, ros_args)
+        self.ros_thread.sim_time_changed.connect(self.set_use_sim_time)
         self.ros_thread.message_received.connect(self.update_ui)
         self.ros_thread.start()
+
+    @Slot(bool)
+    def set_use_sim_time(self, enabled: bool):
+        self.use_sim_time = enabled
 
     @Slot(object)
     def update_ui(self, msg: ScenarioStatusList):
         # Update timestamp label
-        self.lbl_status.setText(f"Last Update: {format_time_msg(msg.stamp)}")
+        self.lbl_status.setText(
+            f"Last Update: {format_time_msg(msg.stamp, use_sim_time=self.use_sim_time)}"
+        )
 
         cleanup_set = set()
 
@@ -366,11 +398,15 @@ class BddVisualizer(QMainWindow):
 
             # update behaviour
             bhv_item = scr_data["bhv_item"]
-            update_bhv_item_view(bhv_item=bhv_item, bhv_status=scr_status.behaviour)
+            update_bhv_item_view(
+                bhv_item=bhv_item,
+                bhv_status=scr_status.behaviour,
+                use_sim_time=self.use_sim_time,
+            )
 
             # update scenario item
             scr_finished = update_scr_item_view(
-                scr_item=scr_item, scr_status=scr_status
+                scr_item=scr_item, scr_status=scr_status, use_sim_time=self.use_sim_time
             )
             if scr_finished:
                 self._scenario_items[ctx_id]["finished"] = True
@@ -385,7 +421,9 @@ class BddVisualizer(QMainWindow):
                 fl_data = scr_data["children"][f_rep]
                 fl_item = fl_data["item"]
 
-                update_fluent_item_view(fl_item=fl_item, fl_status=fl_status)
+                update_fluent_item_view(
+                    fl_item=fl_item, fl_status=fl_status, use_sim_time=self.use_sim_time
+                )
 
                 active_trins = set()
                 for trin_msg in fl_status.trinaries:
@@ -398,7 +436,10 @@ class BddVisualizer(QMainWindow):
                     trin_id = len(fl_data["children"]) + 1
                     # Create new trinary entry
                     trin_item = create_new_trin_item(
-                        fl_item=fl_item, trin_id=trin_id, trin_msg=trin_msg
+                        fl_item=fl_item,
+                        trin_id=trin_id,
+                        trin_msg=trin_msg,
+                        use_sim_time=self.use_sim_time,
                     )
                     fl_data["children"][trin_t] = {
                         "item": trin_item,

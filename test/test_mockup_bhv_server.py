@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Minh Nguyen
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,23 +15,20 @@
 import os
 import unittest
 
-from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import AnyLaunchDescriptionSource
 import launch_testing
 import launch_testing.actions
-
 import pytest
 import rclpy
-from rclpy.action import ActionClient
-
 from ament_index_python.packages import get_package_share_directory
-
 from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_OBJ
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import ParamValue, Trinary
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import AnyLaunchDescriptionSource
+from rclpy.action import ActionClient
 from rdflib import Namespace
 
+from launch import LaunchDescription
 
 TEST_NS = Namespace("https://secorolab.github.io/models/test/")
 

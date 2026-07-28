@@ -14,15 +14,14 @@
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Optional
-from rclpy.impl.rcutils_logger import RcutilsLogger
-from rclpy.client import Client
-from rclpy.node import Node
 
+from ament_index_python import get_package_share_directory
+from rclpy.client import Client
+from rclpy.impl.rcutils_logger import RcutilsLogger
+from rclpy.node import Node
 from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
 from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
-from scene_dsl.rdf_parser.scenex import SceneInstanceModel
-
+from scene_dsl.rdf_parser.scenex import SceneInstanceModel, get_ros_pkg_path
 from simulation_interfaces.msg import Result, SimulationState, SimulatorFeatures
 from simulation_interfaces.srv import (
     GetSimulationState,
@@ -30,7 +29,6 @@ from simulation_interfaces.srv import (
     LoadWorld,
     SetSimulationState,
 )
-
 
 FEATURE_NAMES = {
     value: name
@@ -62,7 +60,7 @@ class SimInterface:
     _get_sim_state_srv_client: Client
     _set_sim_state_srv_client: Client
     _sim_feature_srv_client: Client
-    _sim_features: Optional[SimulatorFeatures]
+    _sim_features: SimulatorFeatures | None
 
     def __init__(
         self,
@@ -112,7 +110,7 @@ class SimInterface:
             srv_name=set_sim_state_srv_full,
         )
 
-    async def get_sim_features(self, quiet=True) -> Optional[SimulatorFeatures]:
+    async def get_sim_features(self, quiet=True) -> SimulatorFeatures | None:
         if self._sim_features is not None:
             return self._sim_features
 
@@ -197,21 +195,10 @@ class SimInterface:
                 f"{response.result.error_message}"
             )
 
-    async def load_world(self, scene_inst: SceneInstanceModel) -> Path:
+    async def load_world(self, scene_inst: SceneInstanceModel) -> Path | None:
         features = await self.get_sim_features(quiet=False)
         if features is None or SimulatorFeatures.WORLD_LOADING not in features.features:
             raise RuntimeError("simulator does not support world loading")
-
-        state = await self.get_sim_state()
-        if state.state == SimulationState.STATE_PLAYING:
-            await self.set_sim_state(
-                SimulationState(state=SimulationState.STATE_STOPPED)
-            )
-
-        if not self._load_world_srv_client.wait_for_service(timeout_sec=self.timeout):
-            raise TimeoutError(
-                f"Timed out waiting for load_world after {self.timeout}s"
-            )
 
         resource_types = {
             resource_type
@@ -228,16 +215,34 @@ class SimInterface:
             for model in scene_inst.models.values()
             if resource_types.intersection(model.types)
         ]
-        if len(resources) != 1:
+        if not resources:
+            return None
+        if len(resources) > 1:
             raise ValueError(
-                f"SceneInstance '{scene_inst.id}': expected one supported scene model format ({features.spawn_formats}),"
-                f" found {len(resources)}"
+                f"SceneInstance '{scene_inst.id}': ambiguous supported scene models: "
+                f"{[model.id for model in resources]}"
             )
 
         path_str = resources[0].get_attr(URI_EXEC_PRED_PATH)
         if not isinstance(path_str, str):
-            raise ValueError(f"scene model {resources[0].id} has no path")
-        path = Path(path_str).expanduser()
+            raise TypeError(f"scene model {resources[0].id} has no path")
+        ros_pkg_path = get_ros_pkg_path(resources[0])
+        path = (
+            Path(get_package_share_directory(ros_pkg_path[0])) / ros_pkg_path[1]
+            if ros_pkg_path is not None
+            else Path(path_str).expanduser()
+        )
+
+        state = await self.get_sim_state()
+        if state.state == SimulationState.STATE_PLAYING:
+            await self.set_sim_state(
+                SimulationState(state=SimulationState.STATE_STOPPED)
+            )
+
+        if not self._load_world_srv_client.wait_for_service(timeout_sec=self.timeout):
+            raise TimeoutError(
+                f"Timed out waiting for load_world after {self.timeout}s"
+            )
 
         request = LoadWorld.Request()
         request.uri = str(path)

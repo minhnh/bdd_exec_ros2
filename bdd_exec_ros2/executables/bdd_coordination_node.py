@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Minh Nguyen
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,29 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Optional
 import os
-from uuid import UUID, uuid4
-from dataclasses import dataclass
 import threading
-from rdflib import Graph, URIRef
+from dataclasses import dataclass
+from typing import Any
+from uuid import UUID, uuid4
 
 import rclpy
-from rclpy.action.client import ClientGoalHandle, ActionClient
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from rclpy.node import Node
-from rclpy.publisher import Publisher
-from rclpy.subscription import Subscription
-from rclpy.executors import ExternalShutdownException
-from rclpy.time import Time
-from std_msgs.msg import Empty as EmptyMsg
-from unique_identifier_msgs.msg import UUID as UUIDMsg
 from ament_index_python import get_package_share_directory
-
-from rdf_utils.models.common import ModelBase
+from bdd_dsl.models.observation import ObservationManager, trin_policy_and
+from bdd_dsl.models.urirefs import (
+    URI_ROS_PRED_CHNL_NAME,
+    URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_TYPE_TOPIC,
+)
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
 from bdd_dsl.models.variation import get_task_var_dicts
-from bdd_dsl.models.observation import ObservationManager, trin_policy_and
 from bdd_dsl.representation import (
     ClauseRepBuilder,
     ScenarioVariantRep,
@@ -48,30 +39,36 @@ from bdd_dsl.representation import (
     get_tmpl_fc_located_at,
     get_tmpl_fc_str_tmpl,
 )
-from bdd_dsl.models.urirefs import (
-    URI_ROS_PRED_TYPE_NAME,
-    URI_ROS_PRED_CHNL_NAME,
-    URI_ROS_TYPE_TOPIC,
-)
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
     Event,
     ScenarioStatusList,
     TrinaryStamped,
 )
+from rclpy.action.client import ActionClient, ClientGoalHandle
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.publisher import Publisher
+from rclpy.subscription import Subscription
+from rclpy.time import Time
+from rdf_utils.models.common import ModelBase
+from rdflib import Graph, URIRef
+from std_msgs.msg import Empty as EmptyMsg
+from unique_identifier_msgs.msg import UUID as UUIDMsg
+
 from bdd_exec_ros2.conversions import (
     TRINARY_NAMES,
     format_time_msg,
     from_trin_stamped_msg,
     from_uuid_msg,
+    get_bhv_param_messages,
     get_cfg_messages,
     ros_time_to_stamp,
-    get_bhv_param_messages,
     to_scenario_status_msg,
     to_uuid_msg,
 )
 from bdd_exec_ros2.observation import load_ros_action_model, load_ros_topic_model
-
 
 __DEFAULT_NODE_NAME = "test_coordinator"
 
@@ -82,6 +79,7 @@ def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
 
 def load_graph_models_in_yaml(models_yml: str) -> Graph:
     from pathlib import Path
+
     import yaml
     from rdf_utils.resolver import install_resolver
 
@@ -110,10 +108,10 @@ def load_graph_models_in_yaml(models_yml: str) -> Graph:
             path = os.path.join(pkg_share_path, path)
 
         if model_info["format"] == "robbdd":
-            from textx import metamodel_for_file
-            from textx.registration import language_for_file
             from robbdd.rdf.bdd import create_bdd_model_graph
             from robbdd.rdf.bddx import create_bddx_model_graph
+            from textx import metamodel_for_file
+            from textx.registration import language_for_file
 
             model = metamodel_for_file(path).model_from_file(path)
             lang = language_for_file(path).name
@@ -129,10 +127,7 @@ def load_graph_models_in_yaml(models_yml: str) -> Graph:
             continue
 
         # assuming model can be loaded using rdflib
-        try:
-            g.parse(path, format=model_info["format"])
-        except Exception as e:
-            raise RuntimeError(f"Caught {e} while processing '{path}'")
+        g.parse(path, format=model_info["format"])
 
     return g
 
@@ -146,7 +141,7 @@ class ScenarioContext:
     scr_rep: ScenarioVariantRep
     variation_params: dict[URIRef, Any]
     # Useful for handling timeout, cancelation
-    goal_handle: Optional[ClientGoalHandle] = None
+    goal_handle: ClientGoalHandle | None = None
 
 
 class BddCoordNode(Node):
@@ -154,6 +149,7 @@ class BddCoordNode(Node):
     graph: Graph
     us_loader: UserStoryLoader
 
+    _use_sim_time: bool
     _scenario_contexts: dict[UUID, ScenarioContext]
     _scr_lock: threading.Lock
 
@@ -181,6 +177,9 @@ class BddCoordNode(Node):
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
+        if not isinstance(use_sim_time, bool):
+            raise TypeError("use_sim_time not a bool")
+        self._use_sim_time = use_sim_time
 
         # Behaviour action server
         server_name = self.get_parameter("bhv_server_name").value
@@ -300,14 +299,12 @@ class BddCoordNode(Node):
         with self._scr_lock:
             trin_val = msg.trinary.value
             if trin_val not in TRINARY_NAMES:
-                trin_rep = f"{trin_val} ({format_time_msg(msg=msg.stamp)})"
+                trin_rep = f"{trin_val} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
                 self.get_logger().error(
                     f"Policy assertion callback: no name found for trinary value [{trin_rep}]"
                 )
             else:
-                trin_rep = (
-                    f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=msg.stamp)})"
-                )
+                trin_rep = f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
 
             if forward_to_all:
                 self.get_logger().warning(
@@ -485,7 +482,7 @@ class BddCoordNode(Node):
         forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
         evt_ctx_uuid = from_uuid_msg(msg.scenario_context_id)
         with self._scr_lock:
-            evt_rep = f"{self.graph.namespace_manager.curie(msg.uri)} ({format_time_msg(msg=msg.stamp)})"
+            evt_rep = f"{self.graph.namespace_manager.curie(msg.uri)} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
             self.get_logger().info(f"received event [{evt_rep}]")
 
             if forward_to_all:

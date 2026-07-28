@@ -1,16 +1,16 @@
 """Inspect a simulator or load a SceneInstance through simulation_interfaces."""
 
 import argparse
+import sys
 from enum import StrEnum
 from pathlib import Path
-import sys
 
 import rclpy
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
+from rdf_utils.models.vocab import URI_EXEC_TYPE_SCENE_INST
 from rdflib import RDF, URIRef
 from scene_dsl.langs import scenex_metamodel
-from rdf_utils.models.vocab import URI_EXEC_TYPE_SCENE_INST
 from scene_dsl.rdf.scenex import create_scenex_model_graph
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 

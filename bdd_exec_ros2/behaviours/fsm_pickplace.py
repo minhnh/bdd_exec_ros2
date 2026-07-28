@@ -33,8 +33,9 @@ Examples:
 """
 
 from enum import IntEnum, auto
+
 from coord_dsl.event_loop import EventData
-from coord_dsl.fsm import FSMData, Transition, EventReaction
+from coord_dsl.fsm import EventReaction, FSMData, Transition
 
 
 # Event IDs
