@@ -1,8 +1,0 @@
-import "pickplace.scene"
-
-scene inst (ns=pp) pickplace-isaac {
-    scene: <pickplace_scene>
-    model usd_world as usd {
-        sys path = "/path/to/world.usda"
-    }
-}

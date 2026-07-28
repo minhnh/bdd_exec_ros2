@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from rosidl_runtime_py.utilities import get_action, get_message
-from rdflib import Graph, Literal
-from rdf_utils.models.common import ModelBase
 from bdd_dsl.models.urirefs import (
-    URI_ROS_PRED_TYPE_NAME,
     URI_ROS_PRED_CHNL_NAME,
+    URI_ROS_PRED_TYPE_NAME,
     URI_ROS_TYPE_ACTION,
     URI_ROS_TYPE_TOPIC,
 )
+from rdf_utils.models.common import ModelBase
+from rdflib import Graph, Literal
+from rosidl_runtime_py.utilities import get_action, get_message
 
 
 def _load_ros_comm_specs(graph: Graph, model: ModelBase) -> tuple[str, str]:
@@ -28,12 +28,12 @@ def _load_ros_comm_specs(graph: Graph, model: ModelBase) -> tuple[str, str]:
         subject=model.id, predicate=URI_ROS_PRED_CHNL_NAME, any=False
     )
     if not isinstance(topic_name, Literal):
-        raise ValueError(f"'channel-name' of '{model.id}' not a Literal: {topic_name}")
+        raise TypeError(f"'channel-name' of '{model.id}' not a Literal: {topic_name}")
     msg_type_str = graph.value(
         subject=model.id, predicate=URI_ROS_PRED_TYPE_NAME, any=False
     )
     if not isinstance(msg_type_str, Literal):
-        raise ValueError(f"'type-name' of '{model.id}' not a Literal: {msg_type_str}")
+        raise TypeError(f"'type-name' of '{model.id}' not a Literal: {msg_type_str}")
     return topic_name.toPython(), msg_type_str.toPython()
 
 

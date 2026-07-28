@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Minh Nguyen
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,26 +14,24 @@
 import time
 from random import random
 
-from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_AGN, URI_BHV_PRED_TARGET_OBJ
-from rdflib import Graph, Namespace, URIRef
-from rdf_utils.namespace import URL_SECORO_M
-from coord_dsl.fsm import FSMData, consume_event, fsm_step, produce_event
-from coord_dsl.event_loop import reconfig_event_buffers
-
 import rclpy
-from rclpy.node import Node
+from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_AGN, URI_BHV_PRED_TARGET_OBJ
+from bdd_ros2_interfaces.action import Behaviour
+from bdd_ros2_interfaces.msg import Event, Trinary, TrinaryStamped
+from coord_dsl.event_loop import reconfig_event_buffers
+from coord_dsl.fsm import FSMData, consume_event, fsm_step, produce_event
 from rclpy.action.server import ActionServer, CancelResponse
 from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rdf_utils.namespace import URL_SECORO_M
+from rdflib import Graph, Namespace, URIRef
 
-from bdd_ros2_interfaces.msg import Event, Trinary, TrinaryStamped
-from bdd_ros2_interfaces.action import Behaviour
 from bdd_exec_ros2.behaviours.fsm_pickplace import (
     EVENT_URIS,
     EventID,
     StateID,
     create_fsm,
 )
-
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
 TOPIC_LOCATED_PICK = "/obs_policy/located_at_pick_ws"
@@ -315,9 +311,8 @@ class MockupBhvNode(Node):
                 trinary_msg.stamp = self.get_clock().now().to_msg()
                 if pp_fsm.current_state_index == StateID.S_PERCEIVE:
                     self.located_pick_pub.publish(trinary_msg)
-                elif pp_fsm.current_state_index == StateID.S_APPROACH:
-                    if ud.placing:
-                        self.is_held_pub.publish(trinary_msg)
+                elif pp_fsm.current_state_index == StateID.S_APPROACH and ud.placing:
+                    self.is_held_pub.publish(trinary_msg)
 
             # execute behaviour
             fsm_mockup_bhv(fsm=pp_fsm, ud=ud)

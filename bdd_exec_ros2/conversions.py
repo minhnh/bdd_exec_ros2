@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Minh Nguyen
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,10 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Final, Iterable
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from typing import Any, Final
 from uuid import UUID
-from datetime import datetime
+
 from bdd_dsl.models.clauses import WhenBehaviourModel, get_clause_config
+from bdd_dsl.models.observation import (
+    ObservationManager,
+    TrinariesPolicyProtocol,
+    TrinaryStamped,
+)
 from bdd_dsl.models.urirefs import (
     URI_BDD_TYPE_CONFIG,
     URI_BHV_PRED_TARGET_AGN,
@@ -27,28 +32,23 @@ from bdd_dsl.models.urirefs import (
 )
 from bdd_dsl.models.user_story import ScenarioVariantModel
 from bdd_dsl.representation import ScenarioVariantRep
-from trinary import Trinary, Unknown
-from rdflib import URIRef
-
-from rclpy.time import Time
-from unique_identifier_msgs.msg import UUID as UUIDMsg
-from builtin_interfaces.msg import Time as TimeMsg
-
-from bdd_dsl.models.observation import (
-    ObservationManager,
-    TrinariesPolicyProtocol,
-    TrinaryStamped,
-)
-
 from bdd_ros2_interfaces.msg import (
     Configuration,
     FluentStatus,
     ParamValue,
     ScenarioStatus,
-    TrinaryStamped as TrinaryStampedMsg,
+)
+from bdd_ros2_interfaces.msg import (
     Trinary as TrinaryMsg,
 )
-
+from bdd_ros2_interfaces.msg import (
+    TrinaryStamped as TrinaryStampedMsg,
+)
+from builtin_interfaces.msg import Time as TimeMsg
+from rclpy.time import Time
+from rdflib import URIRef
+from trinary import Trinary, Unknown
+from unique_identifier_msgs.msg import UUID as UUIDMsg
 
 S_TO_NS: Final = 1000 * 1000 * 1000
 TRINARY_NAMES = {
@@ -63,9 +63,23 @@ def ros_time_to_stamp(t: Time) -> float:
     return t.nanoseconds / S_TO_NS
 
 
-def format_time_msg(msg: TimeMsg, format_str: str = "%Y-%m-%d %H:%M:%S.%f") -> str:
-    return datetime.fromtimestamp(ros_time_to_stamp(Time.from_msg(msg))).strftime(
-        format_str
+def format_time_msg(
+    msg: TimeMsg,
+    format_str: str = "%Y-%m-%d %H:%M:%S.%f %Z",
+    use_sim_time: bool = False,
+    num_decimals: int = 3,
+) -> str:
+    if not 1 <= num_decimals <= 9:
+        raise ValueError(f"num_decimals must be between 1 and 9, got {num_decimals}")
+
+    fraction = f"{msg.nanosec:09d}"[:num_decimals]
+    if use_sim_time:
+        hours, remainder = divmod(msg.sec, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{fraction}"
+
+    return datetime.fromtimestamp(msg.sec, tz=timezone.utc).strftime(
+        format_str.replace("%f", fraction)
     )
 
 
