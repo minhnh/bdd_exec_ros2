@@ -59,6 +59,21 @@ To run the mockup setup:
 from RDF graphs or RobBDD sources and, when triggered, sends a goal for each scenario variation to a
 [behaviour action server](https://github.com/minhnh/bdd_ros2_interfaces/blob/main/action/Behaviour.action).
 
+By default, `scene_setup_mode` is `none` and variations retain their concurrent execution behavior.
+Set it to `simulation` to prepare variations sequentially through `SimInterface`: the coordinator
+loads or resets the exact scene instance, spawns its invariant and variable-selected elements, and
+starts the behaviour only after setup succeeds. `simulation_service_namespace` defaults to `/`, and
+`world_entity_name` defaults to `world`.
+
+For example, with a working simulator exposing ROS 2 `simulation_interfaces` services:
+
+```bash
+ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml \
+  scene_setup_mode:=simulation \
+  simulation_service_namespace:=/ \
+  world_entity_name:=world
+```
+
 ### Simulation Interface Test
 
 [`sim_interface_test.py`](./bdd_exec_ros2/executables/sim_interface_test.py) is an interactive
@@ -67,12 +82,13 @@ reference client that showcases the main `SimInterface` APIs:
 | Command | `SimInterface` API | Purpose |
 | --- | --- | --- |
 | `list-features` | `get_sim_features()` | Display the simulator's advertised capabilities and spawn formats. |
-| `load-scene` | `setup_scene()` | Load or reset a world and spawn the selected SceneX instance. |
+| `load-scene` | `setup_scene()` | Load or reset a world, spawn the selected SceneX instance, and start simulation. |
 | `get-pose` | `get_element_pose()` | Query the current stamped pose of a scene element. |
 | `reset` | `reset_simulation()` | Perform a basic simulation reset. |
 
 The tool assumes a running simulator with a working ROS 2 `simulation_interfaces` setup, such as
 one provided by Gazebo or Isaac Sim. It does not start or configure the simulator itself.
+After a successful `load-scene`, the simulation is left playing.
 
 Set the installed example path and inspect the simulator:
 
