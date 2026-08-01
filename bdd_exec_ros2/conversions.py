@@ -51,13 +51,10 @@ from builtin_interfaces.msg import Time as TimeMsg
 from rclpy.time import Time
 from rdf_utils.models.execution import get_attr_path
 from rdf_utils.models.geom_coord import get_transform_between_frames
-from rdf_utils.models.vocab import URI_GEOM_TYPE_KTREE, URI_GEOM_TYPE_RIGID_BODY
 from rdf_utils.naming import get_valid_var_name
 from rdflib import Graph, URIRef
-from scene_dsl.rdf_parser.ktree import get_root_frame
 from scene_dsl.rdf_parser.scenex import (
     SceneInstanceModel,
-    get_kinematic_mappings,
     get_ros_pkg_path,
 )
 from scipy.spatial.transform import RigidTransform
@@ -123,42 +120,15 @@ def create_spawn_entity_entries(
         | (additional_elements or set())
     )
     for elem_id in element_ids:
-        element = scene_inst.object_models.get(elem_id)
-        if element is None:
-            element = scene_inst.agent_models.get(elem_id)
-        if element is None:
+        resolved = scene_inst.resolve_element_root_frame(elem_id, resource_types, graph)
+        if resolved is None:
             if warn is not None:
-                warn(f"element '{elem_id}' has no executable model")
+                warn(
+                    f"element '{elem_id}' has no compatible mapped kinematics resource"
+                )
             continue
 
-        elem_models = [
-            elem_model
-            for elem_model in element.values()
-            if elem_model.types & resource_types
-        ]
-        if not elem_models:
-            if warn is not None:
-                warn(f"element '{elem_id}' has no compatible resource")
-            continue
-        if len(elem_models) != 1:
-            raise ValueError(
-                f"element '{elem_id}' has ambiguous compatible resource models"
-            )
-
-        resource = elem_models[0]
-        mappings = [
-            mapping
-            for mapping in get_kinematic_mappings(resource)
-            if mapping.target_type in {URI_GEOM_TYPE_RIGID_BODY, URI_GEOM_TYPE_KTREE}
-        ]
-        if not mappings:
-            if warn is not None:
-                warn(f"resource '{resource.id}' has no mapping")
-            continue
-        if len(mappings) > 1:
-            raise ValueError(f"resource '{resource.id}' has ambiguous mappings")
-
-        mapping = mappings[0]
+        resource, mapping, root = resolved
         sim_entity = mapping.entity
         if sim_entity is None:
             sim_entity = get_valid_var_name(elem_id.n3(graph.namespace_manager))
@@ -168,7 +138,6 @@ def create_spawn_entity_entries(
                     f"converted from URI: {sim_entity}"
                 )
 
-        root = get_root_frame(mapping.target_id, graph)
         transform = get_transform_between_frames(
             root.id, world_body.root_frame.id, graph, rng=rng
         )
