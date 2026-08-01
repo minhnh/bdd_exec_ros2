@@ -206,7 +206,7 @@ def test_create_spawn_entity_entries_skips_resources_without_mappings(monkeypatc
     interface, scene = _spawn_interface(features)
     warnings = []
     monkeypatch.setattr(
-        "bdd_exec_ros2.conversions.get_kinematic_mappings", lambda *_: []
+        SceneInstanceModel, "resolve_element_root_frame", lambda *_: None
     )
 
     assert (
@@ -218,7 +218,10 @@ def test_create_spawn_entity_entries_skips_resources_without_mappings(monkeypatc
         )
         == []
     )
-    assert any("has no mapping" in warning for warning in warnings)
+    assert any(
+        "has no compatible mapped kinematics resource" in warning
+        for warning in warnings
+    )
 
 
 def test_create_spawn_entity_entries_uses_loaded_objects_and_additional_elements():
