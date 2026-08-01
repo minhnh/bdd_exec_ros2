@@ -10,6 +10,15 @@ launch:
   - arg:
       name: "graph_models"
       default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-robbdd-json.yaml"
+  - arg:
+      name: "scene_setup_mode"
+      default: "none"
+  - arg:
+      name: "simulation_service_namespace"
+      default: "/"
+  - arg:
+      name: "world_entity_name"
+      default: "world"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
@@ -19,6 +28,12 @@ launch:
         - from: "$(var config)"
         - name: "graph_models"
           value: "$(var graph_models)"
+        - name: "scene_setup_mode"
+          value: "$(var scene_setup_mode)"
+        - name: "simulation_service_namespace"
+          value: "$(var simulation_service_namespace)"
+        - name: "world_entity_name"
+          value: "$(var world_entity_name)"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "mockup_behaviour_node"

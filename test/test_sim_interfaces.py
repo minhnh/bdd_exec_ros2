@@ -462,6 +462,7 @@ def test_setup_scene_loads_then_resets_same_instance():
     interface.load_world = AsyncMock(return_value=Path("world.usd"))
     interface.reset_simulation = AsyncMock(return_value=None)
     interface._send_spawn_entries = AsyncMock(return_value={})
+    interface.set_sim_state = AsyncMock(return_value=None)
 
     assert asyncio.run(interface.setup_scene(scene)) == {}
     interface.load_world.assert_awaited_once_with(scene)
@@ -473,6 +474,10 @@ def test_setup_scene_loads_then_resets_same_instance():
     entries, sent_features = interface._send_spawn_entries.await_args.args
     assert {elem_id for elem_id, _ in entries} == set(scene.object_models)
     assert sent_features is features
+    assert [call.args[0].state for call in interface.set_sim_state.await_args_list] == [
+        SimulationState.STATE_PLAYING,
+        SimulationState.STATE_PLAYING,
+    ]
 
 
 def test_setup_scene_reloads_changed_instance():
@@ -484,12 +489,16 @@ def test_setup_scene_reloads_changed_instance():
     interface.load_world = AsyncMock(return_value=Path("world.usd"))
     interface.reset_simulation = AsyncMock(return_value=None)
     interface._send_spawn_entries = AsyncMock(return_value={})
+    interface.set_sim_state = AsyncMock(return_value=None)
 
     asyncio.run(interface.setup_scene(scene))
 
     interface.load_world.assert_awaited_once_with(scene)
     interface.reset_simulation.assert_not_awaited()
     assert interface._active_scene_inst_id == scene.id
+    assert interface.set_sim_state.await_args.args[0].state == (
+        SimulationState.STATE_PLAYING
+    )
 
 
 def test_setup_scene_keeps_active_instance_when_loading_fails():
@@ -501,12 +510,29 @@ def test_setup_scene_keeps_active_instance_when_loading_fails():
     interface._active_scene_inst_id = active_id
     interface.load_world = AsyncMock(side_effect=RuntimeError("load failed"))
     interface._send_spawn_entries = AsyncMock(return_value={})
+    interface.set_sim_state = AsyncMock(return_value=None)
 
     with pytest.raises(RuntimeError, match="load failed"):
         asyncio.run(interface.setup_scene(scene))
 
     assert interface._active_scene_inst_id == active_id
     interface._send_spawn_entries.assert_not_awaited()
+    interface.set_sim_state.assert_not_awaited()
+
+
+def test_setup_scene_does_not_play_when_spawning_fails():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    interface.load_world = AsyncMock(return_value=Path("world.usd"))
+    interface._send_spawn_entries = AsyncMock(side_effect=RuntimeError("spawn failed"))
+    interface.set_sim_state = AsyncMock(return_value=None)
+
+    with pytest.raises(RuntimeError, match="spawn failed"):
+        asyncio.run(interface.setup_scene(scene))
+
+    interface.set_sim_state.assert_not_awaited()
 
 
 def test_reset_command_does_not_require_scene_model():

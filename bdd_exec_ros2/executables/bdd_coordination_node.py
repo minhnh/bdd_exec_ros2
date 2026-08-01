@@ -13,7 +13,9 @@
 # limitations under the License.
 import os
 import threading
+from collections import deque
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -26,7 +28,10 @@ from bdd_dsl.models.urirefs import (
     URI_ROS_TYPE_TOPIC,
 )
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
-from bdd_dsl.models.variation import get_task_var_dicts
+from bdd_dsl.models.variation import (
+    collect_variable_scene_elements,
+    get_task_var_dicts,
+)
 from bdd_dsl.representation import (
     ClauseRepBuilder,
     ScenarioVariantRep,
@@ -70,8 +75,14 @@ from bdd_exec_ros2.conversions import (
     to_uuid_msg,
 )
 from bdd_exec_ros2.observation import load_ros_action_model, load_ros_topic_model
+from bdd_exec_ros2.sim_interfaces import SimInterface
 
 __DEFAULT_NODE_NAME = "test_coordinator"
+
+
+class SceneSetupMode(StrEnum):
+    NONE = "none"
+    SIMULATION = "simulation"
 
 
 def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
@@ -152,6 +163,10 @@ class BddCoordNode(Node):
     us_loader: UserStoryLoader
 
     _use_sim_time: bool
+    _scene_setup_mode: SceneSetupMode
+    _scene_setup_active: bool
+    _sim_interface: SimInterface | None
+    _pending_scenarios: deque[tuple[ScenarioVariantModel, dict[URIRef, Any]]]
     _scenario_contexts: dict[UUID, ScenarioContext]
     _scr_lock: threading.Lock
 
@@ -176,6 +191,9 @@ class BddCoordNode(Node):
         self.declare_parameter("status_topic", "status")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
+        self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE.value)
+        self.declare_parameter("simulation_service_namespace", "/")
+        self.declare_parameter("world_entity_name", "world")
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
@@ -253,10 +271,14 @@ class BddCoordNode(Node):
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
+        self._scene_setup_mode, self._sim_interface = self._resolve_scene_setup()
+
         # Add lock to manager objects that may be modified across threads/processes
         self._scr_lock = threading.Lock()
         self._topic_fpolicy_reg = {}
         self._scenario_contexts = {}
+        self._pending_scenarios = deque()
+        self._scene_setup_active = False
         self._clause_rep_builder = ClauseRepBuilder(
             tmpl_creators=[
                 get_tmpl_fc_is_held,
@@ -276,6 +298,40 @@ class BddCoordNode(Node):
 
         # Observation
         self._fpolicy_subs = {}
+
+    def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
+        mode_value = self.get_parameter("scene_setup_mode").value
+        if not isinstance(mode_value, str):
+            raise TypeError("'scene_setup_mode' must be a string")
+        try:
+            mode = SceneSetupMode(mode_value)
+        except ValueError as exc:
+            supported = ", ".join(item.value for item in SceneSetupMode)
+            raise ValueError(
+                f"unsupported 'scene_setup_mode' {mode_value!r}; expected one of: {supported}"
+            ) from exc
+
+        if mode is SceneSetupMode.NONE:
+            return mode, None
+
+        if mode is SceneSetupMode.SIMULATION:
+            simulation_service_namespace = self.get_parameter(
+                "simulation_service_namespace"
+            ).value
+            if not isinstance(simulation_service_namespace, str):
+                raise TypeError("'simulation_service_namespace' must be a string")
+            world_entity_name = self.get_parameter("world_entity_name").value
+            if not isinstance(world_entity_name, str):
+                raise TypeError("'world_entity_name' must be a string")
+            return mode, SimInterface(
+                node=self,
+                timeout=self.timeout_sec,
+                ns=simulation_service_namespace,
+                model_graph=self.graph,
+                world_entity_name=world_entity_name,
+            )
+
+        raise AssertionError(f"unhandled scene setup mode: {mode}")
 
     def _send_event(self, evt_uri: URIRef, ctx_id: UUID) -> None:
         evt_msg = Event()
@@ -378,9 +434,9 @@ class BddCoordNode(Node):
             qos_profile=10,
         )
 
-    def _execute_scenario_variant(
+    def _create_scenario_context(
         self, scr_var: ScenarioVariantModel, val_dict: dict[URIRef, Any]
-    ):
+    ) -> ScenarioContext:
         scr_context_id = uuid4()
 
         obs_manager = ObservationManager.from_scenario_variant(
@@ -402,7 +458,7 @@ class BddCoordNode(Node):
             ns_manager=self.graph.namespace_manager,
         )
 
-        context = ScenarioContext(
+        return ScenarioContext(
             context_id=scr_context_id,
             variation_params=val_dict,
             obs_manager=obs_manager,
@@ -413,6 +469,12 @@ class BddCoordNode(Node):
                 scene_model=scr_var.scene,
             ),
         )
+
+    def _start_scenario_variant(
+        self, context: ScenarioContext, scr_var: ScenarioVariantModel
+    ) -> None:
+        scr_context_id = context.context_id
+        val_dict = context.variation_params
 
         # Publish scenario start event
         self._send_event(
@@ -436,9 +498,58 @@ class BddCoordNode(Node):
             )
         )
 
+    def _schedule_next_scenario(self) -> None:
+        if self._scene_setup_mode is not SceneSetupMode.SIMULATION:
+            return
+        with self._scr_lock:
+            if (
+                self._scene_setup_active
+                or self._scenario_contexts
+                or not self._pending_scenarios
+            ):
+                return
+            self._scene_setup_active = True
+
+        executor = self.executor
+        if executor is None:
+            self._scene_setup_active = False
+            raise RuntimeError("coordinator is not attached to an executor")
+        executor.create_task(self._prepare_next_scenario())
+
+    async def _prepare_next_scenario(self) -> None:
+        assert self._sim_interface is not None
+        try:
+            while self._pending_scenarios and not self._scenario_contexts:
+                scr_var, val_dict = self._pending_scenarios.popleft()
+                context = self._create_scenario_context(scr_var, val_dict)
+                additional_elements: set[URIRef] = set()
+                for value in val_dict.values():
+                    collect_variable_scene_elements(
+                        scr_var.scene, value, additional_elements
+                    )
+
+                try:
+                    await self._sim_interface.setup_scene(
+                        context.scene_inst,
+                        additional_elements=additional_elements,
+                    )
+                except Exception as exc:  # noqa: BLE001 - skip failed setup and continue
+                    self._remove_context_topic_reg(context.context_id)
+                    self.get_logger().error(
+                        f"Scene setup failed for '{scr_var.id}': {exc}"
+                    )
+                    continue
+
+                self._start_scenario_variant(context, scr_var)
+                return
+        finally:
+            with self._scr_lock:
+                self._scene_setup_active = False
+
     def _status_timer_callback(self):
         if len(self._scenario_contexts) == 0:
             # no scenarios
+            self._schedule_next_scenario()
             return
 
         now = self.get_clock().now()
@@ -467,8 +578,21 @@ class BddCoordNode(Node):
                 del self._scenario_contexts[ctx_id]
 
         self._scr_status_pub.publish(status_msg)
+        self._schedule_next_scenario()
 
     def start_test_cb(self, _):
+        if self._scene_setup_mode is SceneSetupMode.SIMULATION:
+            with self._scr_lock:
+                if (
+                    self._scene_setup_active
+                    or self._pending_scenarios
+                    or self._scenario_contexts
+                ):
+                    self.get_logger().warning(
+                        "Ignoring start request while scenario execution is active"
+                    )
+                    return
+
         us_var_dict = self.us_loader.get_us_scenario_variants()
         for scr_var_set in us_var_dict.values():
             for scr_var_id in scr_var_set:
@@ -478,10 +602,12 @@ class BddCoordNode(Node):
 
                 var_val_dicts = get_task_var_dicts(scr_var.task_variation)
                 for val_dict in var_val_dicts:
-                    self._execute_scenario_variant(
-                        scr_var=scr_var,
-                        val_dict=val_dict,
-                    )
+                    if self._scene_setup_mode is SceneSetupMode.SIMULATION:
+                        self._pending_scenarios.append((scr_var, val_dict))
+                    else:
+                        context = self._create_scenario_context(scr_var, val_dict)
+                        self._start_scenario_variant(context, scr_var)
+        self._schedule_next_scenario()
 
     def evt_sub_cb(self, msg: Event):
         evt_uri = URIRef(msg.uri)

@@ -523,4 +523,6 @@ class SimInterface:
         else:
             await self.load_world(scene_inst)
             self._active_scene_inst_id = scene_inst.id
-        return await self._send_spawn_entries(entries, features)
+        spawned = await self._send_spawn_entries(entries, features)
+        await self.set_sim_state(SimulationState(state=SimulationState.STATE_PLAYING))
+        return spawned
