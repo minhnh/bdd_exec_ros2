@@ -54,6 +54,7 @@ from rclpy.subscription import Subscription
 from rclpy.time import Time
 from rdf_utils.models.common import ModelBase
 from rdflib import Graph, URIRef
+from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 from std_msgs.msg import Empty as EmptyMsg
 from unique_identifier_msgs.msg import UUID as UUIDMsg
 
@@ -140,6 +141,7 @@ class ScenarioContext:
     obs_manager: ObservationManager
     scr_rep: ScenarioVariantRep
     variation_params: dict[URIRef, Any]
+    scene_inst: SceneInstanceModel
     # Useful for handling timeout, cancelation
     goal_handle: ClientGoalHandle | None = None
 
@@ -405,6 +407,11 @@ class BddCoordNode(Node):
             variation_params=val_dict,
             obs_manager=obs_manager,
             scr_rep=scr_rep,
+            scene_inst=SceneInstanceModel(
+                obs_manager.scenario_exec.scene_inst_id,
+                self.graph,
+                scene_model=scr_var.scene,
+            ),
         )
 
         # Publish scenario start event

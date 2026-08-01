@@ -4,9 +4,9 @@ ns scene_lab='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/
 ns scene_lab_isaac='https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab-isaacsim/'
 
 obj set (ns=lab_env) pickplace_objects {
-    object object1,
-    object object2,
-    object object3
+    object tomato_soup_can,
+    object mustard_bottle,
+    object dex_cube
 }
 obj set (ns=lab_env) workspace_objects {
     object table,
@@ -14,8 +14,8 @@ obj set (ns=lab_env) workspace_objects {
     object box2
 }
 ws set (ns=lab_env) box_workspaces {
-    workspace box1,
-    workspace box2
+    workspace box1_ws,
+    workspace box2_ws
 }
 ws set (ns=lab_env) table_workspaces {
     workspace table
@@ -24,8 +24,8 @@ agn set (ns=isaac_agn) isaac_agents {
     agent panda
 }
 
-comp (ns=lab_env) comp_box1 of ws <box_workspaces.box1> { obj <workspace_objects.box1> }
-comp (ns=lab_env) comp_box2 of ws <box_workspaces.box2> { obj <workspace_objects.box2> }
+comp (ns=lab_env) comp_box1 of ws <box_workspaces.box1_ws> { obj <workspace_objects.box1> }
+comp (ns=lab_env) comp_box2 of ws <box_workspaces.box2_ws> { obj <workspace_objects.box2> }
 comp (ns=lab_env) comp_table of ws <table_workspaces.table> {
     obj <workspace_objects.table>
     ws comp <comp_box1>
