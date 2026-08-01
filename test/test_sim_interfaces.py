@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from builtin_interfaces.msg import Time
+from geometry_msgs.msg import Pose
 from rdf_utils.models.common import ModelBase
 from rdf_utils.models.execution import get_attr_path
 from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
@@ -27,8 +28,14 @@ from scene_dsl.langs import scenex_metamodel
 from scene_dsl.rdf.scenex import create_scenex_model_graph
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 from scene_dsl.rdf_parser.vocab import URI_ROS_PRED_PACKAGE_NAME, URI_ROS_TYPE_PACKAGE
-from simulation_interfaces.msg import Result, SimulationState, SimulatorFeatures
+from simulation_interfaces.msg import (
+    EntityState,
+    Result,
+    SimulationState,
+    SimulatorFeatures,
+)
 from simulation_interfaces.srv import ResetSimulation
+from std_msgs.msg import Header
 
 from bdd_exec_ros2.conversions import create_spawn_entity_entries, format_time_msg
 from bdd_exec_ros2.executables.sim_interface_test import Command, _parse_args
@@ -337,6 +344,56 @@ def test_spawn_entities_falls_back_when_batch_service_is_unavailable():
     assert len(interface._spawn_entity_srv_client.requests) == len(scene.object_models)
 
 
+def test_get_element_pose_queries_resolved_entity_and_preserves_header():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.ENTITY_STATE_GETTING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    element_id = next(iter(scene.object_models))
+    state = EntityState(
+        header=Header(frame_id="world"),
+        pose=Pose(),
+    )
+    result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
+    interface._get_entity_state_srv_client = _Client(
+        SimpleNamespace(result=result, state=state)
+    )
+
+    pose = asyncio.run(interface.get_element_pose(scene, element_id))
+
+    resolved = scene.resolve_element_root_frame(
+        element_id,
+        {SUPPORTED_FORMAT_URIS["usd"]},
+        interface._model_graph,
+    )
+    assert resolved is not None
+    assert interface._get_entity_state_srv_client.request.entity == resolved[1].entity
+    assert pose is not None
+    assert pose.header == state.header
+    assert pose.pose == state.pose
+
+
+def test_get_element_pose_returns_none_when_element_or_entity_is_missing():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.ENTITY_STATE_GETTING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    result = SimpleNamespace(result=Result.RESULT_NOT_FOUND, error_message="")
+    interface._get_entity_state_srv_client = _Client(SimpleNamespace(result=result))
+
+    assert (
+        asyncio.run(
+            interface.get_element_pose(scene, URIRef("urn:test:missing-element"))
+        )
+        is None
+    )
+    assert not interface._get_entity_state_srv_client.requests
+
+    element_id = next(iter(scene.object_models))
+    assert asyncio.run(interface.get_element_pose(scene, element_id)) is None
+    assert len(interface._get_entity_state_srv_client.requests) == 1
+
+
 def test_reset_simulation_uses_default_scope_and_stops_playing_simulation():
     result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
     interface = SimInterface.__new__(SimInterface)
@@ -454,6 +511,18 @@ def test_setup_scene_keeps_active_instance_when_loading_fails():
 
 def test_reset_command_does_not_require_scene_model():
     assert _parse_args(["reset"]).command == Command.RESET
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["get-pose", "--scene-model", "scene.scenex"],
+        ["get-pose", "--element-id", "scene:element"],
+    ],
+)
+def test_get_pose_command_requires_model_and_element_id(args):
+    with pytest.raises(SystemExit):
+        _parse_args(args)
 
 
 def test_service_names_preserve_relative_and_explicit_namespaces():

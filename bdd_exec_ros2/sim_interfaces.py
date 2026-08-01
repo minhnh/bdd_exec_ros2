@@ -15,12 +15,14 @@
 from pathlib import Path
 
 from ament_index_python import get_package_share_directory
+from geometry_msgs.msg import PoseStamped
 from rclpy.client import Client
 from rclpy.impl.rcutils_logger import RcutilsLogger
 from rclpy.node import Node
 from rdf_utils.models.vocab import (
     URI_EXEC_PRED_PATH,
 )
+from rdf_utils.naming import get_valid_var_name
 from rdflib import Graph, URIRef
 from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
 from scene_dsl.rdf_parser.scenex import (
@@ -36,6 +38,7 @@ from simulation_interfaces.msg import (
     SpawnEntity as SpawnEntityMsg,
 )
 from simulation_interfaces.srv import (
+    GetEntityState,
     GetSimulationState,
     GetSimulatorFeatures,
     LoadWorld,
@@ -81,6 +84,7 @@ def _require_supported_resource_types(features: SimulatorFeatures) -> set[URIRef
 class SimInterface:
     _load_world_srv_client: Client
     _get_sim_state_srv_client: Client
+    _get_entity_state_srv_client: Client
     _set_sim_state_srv_client: Client
     _reset_simulation_srv_client: Client
     _sim_feature_srv_client: Client
@@ -100,6 +104,7 @@ class SimInterface:
         spawn_entities_srv_name: str = "spawn_entities",
         model_graph: Graph | None = None,
         world_entity_name: str = "world",
+        get_entity_state_srv_name: str = "get_entity_state",
     ) -> None:
         self.ns: str = ns
         self.timeout: float = timeout
@@ -134,6 +139,11 @@ class SimInterface:
         self._get_sim_state_srv_client = node.create_client(
             srv_type=GetSimulationState,
             srv_name=get_sim_state_srv_full,
+        )
+
+        self._get_entity_state_srv_client = node.create_client(
+            srv_type=GetEntityState,
+            srv_name=_service_name(self.ns, get_entity_state_srv_name),
         )
 
         set_sim_state_srv_full = _service_name(self.ns, set_sim_state_srv_name)
@@ -207,6 +217,59 @@ class SimInterface:
                 f"{response.result.error_message}"
             )
         return response.state
+
+    async def get_element_pose(
+        self,
+        scene_inst: SceneInstanceModel,
+        element_id: URIRef,
+    ) -> PoseStamped | None:
+        if self._model_graph is None:
+            raise RuntimeError("getting an element pose requires a model graph")
+        features = await self.get_sim_features(quiet=False)
+        if (
+            features is None
+            or SimulatorFeatures.ENTITY_STATE_GETTING not in features.features
+        ):
+            raise RuntimeError("simulator does not support getting entity state")
+
+        resolved = scene_inst.resolve_element_root_frame(
+            element_id,
+            _require_supported_resource_types(features),
+            self._model_graph,
+        )
+        if resolved is None:
+            return None
+
+        _, mapping, _ = resolved
+        entity = mapping.entity or get_valid_var_name(
+            element_id.n3(self._model_graph.namespace_manager)
+        )
+        if not self._get_entity_state_srv_client.wait_for_service(
+            timeout_sec=self.timeout
+        ):
+            raise TimeoutError(
+                f"Timed out waiting for get_entity_state after {self.timeout}s"
+            )
+
+        future = self._get_entity_state_srv_client.call_async(
+            GetEntityState.Request(entity=entity)
+        )
+        timer = self._node.create_timer(self.timeout, future.cancel)
+        try:
+            response = await future
+        finally:
+            self._node.destroy_timer(timer)
+
+        if response is None:
+            raise TimeoutError(f"get_entity_state timed out after {self.timeout}s")
+        if response.result.result == Result.RESULT_NOT_FOUND:
+            return None
+        if response.result.result != Result.RESULT_OK:
+            raise RuntimeError(
+                f"get_entity_state failed ({response.result.result}): "
+                f"{response.result.error_message}"
+            )
+        return PoseStamped(header=response.state.header, pose=response.state.pose)
 
     async def set_sim_state(self, state: SimulationState) -> None:
         features = await self.get_sim_features(quiet=False)
