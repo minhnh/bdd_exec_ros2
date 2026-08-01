@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inspect a simulator or load a SceneInstance through simulation_interfaces."""
+"""Inspect, reset, or load a simulator through simulation_interfaces."""
 
 import argparse
 import sys
@@ -35,11 +35,12 @@ from bdd_exec_ros2.sim_interfaces import (
 class Command(StrEnum):
     LIST_FEATURES = "list-features"
     LOAD_SCENE = "load-scene"
+    RESET = "reset"
 
 
 def _parse_args(args=None):
     parser = argparse.ArgumentParser(
-        description="Inspect or load a simulation scene",
+        description="Inspect, reset, or load a simulation scene",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("command", type=Command, choices=Command)
@@ -62,7 +63,7 @@ def _parse_args(args=None):
     options = parser.parse_args(args)
     if options.command == Command.LOAD_SCENE and options.scene_model is None:
         parser.error("load-scene requires --scene-model")
-    if options.command == Command.LIST_FEATURES and options.scene_model is not None:
+    if options.command != Command.LOAD_SCENE and options.scene_model is not None:
         parser.error("--scene-model is only valid with load-scene")
     return options
 
@@ -99,6 +100,13 @@ def main(args=None):
             for feat_num in features.features:
                 feat_name = FEATURE_NAMES.get(feat_num, f"UNKNOWN({feat_num})")
                 print(f"- {feat_name}")
+            return
+
+        if options.command == Command.RESET:
+            task = rclpy.get_global_executor().create_task(sim_intf.reset_simulation())
+            rclpy.spin_until_future_complete(node, task)
+            task.result()
+            node.get_logger().info("Reset simulation")
             return
 
         if options.command == Command.LOAD_SCENE:

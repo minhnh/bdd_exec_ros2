@@ -28,8 +28,10 @@ from scene_dsl.rdf.scenex import create_scenex_model_graph
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 from scene_dsl.rdf_parser.vocab import URI_ROS_PRED_PACKAGE_NAME, URI_ROS_TYPE_PACKAGE
 from simulation_interfaces.msg import Result, SimulationState, SimulatorFeatures
+from simulation_interfaces.srv import ResetSimulation
 
 from bdd_exec_ros2.conversions import create_spawn_entity_entries, format_time_msg
+from bdd_exec_ros2.executables.sim_interface_test import Command, _parse_args
 from bdd_exec_ros2.sim_interfaces import (
     SUPPORTED_FORMAT_URIS,
     SimInterface,
@@ -157,6 +159,7 @@ def _spawn_interface(features):
     interface._model_graph = graph
     interface.world_entity_name = "world"
     interface._sim_features = features
+    interface._active_scene_inst_id = None
     return interface, scene
 
 
@@ -331,19 +334,123 @@ def test_spawn_entities_falls_back_when_batch_service_is_unavailable():
     assert len(interface._spawn_entity_srv_client.requests) == len(scene.object_models)
 
 
-def test_setup_scene_passes_exact_instance_to_low_level_operations():
+def test_reset_simulation_uses_default_scope_and_stops_playing_simulation():
+    result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
+    interface = SimInterface.__new__(SimInterface)
+    interface.timeout = 1.0
+    interface._node = _Node()
+    interface._sim_features = SimpleNamespace(
+        features=[
+            SimulatorFeatures.SIMULATION_RESET,
+            SimulatorFeatures.SIMULATION_STATE_GETTING,
+            SimulatorFeatures.SIMULATION_STATE_SETTING,
+        ]
+    )
+    interface._reset_simulation_srv_client = _Client(SimpleNamespace(result=result))
+    interface._get_sim_state_srv_client = _Client(
+        SimpleNamespace(
+            result=result,
+            state=SimulationState(state=SimulationState.STATE_PLAYING),
+        )
+    )
+    interface._set_sim_state_srv_client = _Client(SimpleNamespace(result=result))
+
+    asyncio.run(interface.reset_simulation())
+
+    assert (
+        interface._reset_simulation_srv_client.request.scope
+        == ResetSimulation.Request.SCOPE_DEFAULT
+    )
+    assert (
+        interface._set_sim_state_srv_client.request.state.state
+        == SimulationState.STATE_STOPPED
+    )
+
+
+def test_reset_simulation_requires_reset_support():
+    interface = SimInterface.__new__(SimInterface)
+    interface._sim_features = SimpleNamespace(features=[])
+
+    with pytest.raises(RuntimeError, match="does not support resetting"):
+        asyncio.run(interface.reset_simulation())
+
+
+def test_reset_simulation_does_not_stop_an_already_stopped_simulation():
+    result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
+    interface = SimInterface.__new__(SimInterface)
+    interface.timeout = 1.0
+    interface._node = _Node()
+    interface._sim_features = SimpleNamespace(
+        features=[SimulatorFeatures.SIMULATION_RESET]
+    )
+    interface._reset_simulation_srv_client = _Client(SimpleNamespace(result=result))
+    interface.get_sim_state = AsyncMock(
+        return_value=SimulationState(state=SimulationState.STATE_STOPPED)
+    )
+    interface.set_sim_state = AsyncMock(return_value=None)
+
+    asyncio.run(interface.reset_simulation())
+
+    interface.set_sim_state.assert_not_awaited()
+
+
+def test_setup_scene_loads_then_resets_same_instance():
     features = SimpleNamespace(
         features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
     )
     interface, scene = _spawn_interface(features)
     interface.load_world = AsyncMock(return_value=Path("world.usd"))
+    interface.reset_simulation = AsyncMock(return_value=None)
     interface._send_spawn_entries = AsyncMock(return_value={})
 
     assert asyncio.run(interface.setup_scene(scene)) == {}
     interface.load_world.assert_awaited_once_with(scene)
+    interface.reset_simulation.assert_not_awaited()
+
+    assert asyncio.run(interface.setup_scene(scene)) == {}
+    interface.load_world.assert_awaited_once_with(scene)
+    interface.reset_simulation.assert_awaited_once_with()
     entries, sent_features = interface._send_spawn_entries.await_args.args
     assert {elem_id for elem_id, _ in entries} == set(scene.object_models)
     assert sent_features is features
+
+
+def test_setup_scene_reloads_changed_instance():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    interface._active_scene_inst_id = URIRef("urn:test:other-scene-instance")
+    interface.load_world = AsyncMock(return_value=Path("world.usd"))
+    interface.reset_simulation = AsyncMock(return_value=None)
+    interface._send_spawn_entries = AsyncMock(return_value={})
+
+    asyncio.run(interface.setup_scene(scene))
+
+    interface.load_world.assert_awaited_once_with(scene)
+    interface.reset_simulation.assert_not_awaited()
+    assert interface._active_scene_inst_id == scene.id
+
+
+def test_setup_scene_keeps_active_instance_when_loading_fails():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    active_id = URIRef("urn:test:active-scene-instance")
+    interface._active_scene_inst_id = active_id
+    interface.load_world = AsyncMock(side_effect=RuntimeError("load failed"))
+    interface._send_spawn_entries = AsyncMock(return_value={})
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        asyncio.run(interface.setup_scene(scene))
+
+    assert interface._active_scene_inst_id == active_id
+    interface._send_spawn_entries.assert_not_awaited()
+
+
+def test_reset_command_does_not_require_scene_model():
+    assert _parse_args(["reset"]).command == Command.RESET
 
 
 def test_service_names_preserve_relative_and_explicit_namespaces():
