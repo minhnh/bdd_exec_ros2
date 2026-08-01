@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inspect, reset, or load a simulator through simulation_interfaces."""
+"""Inspect, reset, load, or query a simulator through simulation_interfaces."""
 
 import argparse
 import sys
@@ -42,7 +42,7 @@ class Command(StrEnum):
 
 def _parse_args(args=None):
     parser = argparse.ArgumentParser(
-        description="Inspect, reset, or load a simulation scene",
+        description="Inspect, reset, load, or query a simulation scene",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("command", type=Command, choices=Command)
@@ -140,13 +140,35 @@ def main(args=None):
             if pose is None:
                 node.get_logger().warning(f"No pose found for '{element_id}'")
             else:
-                print(pose)
+                position = pose.pose.position
+                orientation = pose.pose.orientation
+                print(f"Pose for {element_id.n3(graph.namespace_manager)}:")
+                print(f"  frame: {pose.header.frame_id or 'world'}")
+                print(
+                    f"  stamp: {pose.header.stamp.sec}.{pose.header.stamp.nanosec:09d}"
+                )
+                print(
+                    "  position (xyz): "
+                    f"[{position.x:.6f}, {position.y:.6f}, {position.z:.6f}]"
+                )
+                print(
+                    "  orientation (xyzw): "
+                    f"[{orientation.x:.6f}, {orientation.y:.6f}, "
+                    f"{orientation.z:.6f}, {orientation.w:.6f}]"
+                )
             return
 
         if options.command == Command.LOAD_SCENE:
             task = rclpy.get_global_executor().create_task(sim_intf.setup_scene(scene))
             rclpy.spin_until_future_complete(node, task)
-            node.get_logger().info(f"Spawned entities {task.result()}")
+            spawned = task.result()
+            if not spawned:
+                print("Spawned entities: (none)")
+                return
+
+            print("Spawned entities:")
+            for element_id, entity_name in spawned.items():
+                print(f"  {element_id.n3(graph.namespace_manager)} -> {entity_name}")
             return
 
         raise ValueError(f"unhandled command: {options.command}")
