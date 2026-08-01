@@ -1,22 +1,27 @@
 # bdd-exec-ros2
 
-Package for handling execution of RobBDD models using ROS2 communication.
+Package for handling execution of RobBDD models using ROS 2 communication.
 A GUI tool is also available for visualizing test results.
 
 ## Dependencies
 
-- Python packages:
-  + [rdf-utils](https://github.com/minhnh/rdf-utils)
-  + [bdd-dsl](https://github.com/minhnh/bdd-dsl)
-  + [coord-dsl](https://github.com/secorolab/coord-dsl)
-- ROS packages:
-  + [minhnh/bdd_ros2_interfaces](https://github.com/minhnh/bdd_ros2_interfaces)
-- Visualizer script requires [PySide6](https://pypi.org/project/PySide6/).
+- Python DSL/model packages:
+  - [rdf-utils](https://github.com/minhnh/rdf-utils)
+  - [bdd-dsl](https://github.com/minhnh/bdd-dsl)
+  - [coord-dsl](https://github.com/secorolab/coord-dsl)
+  - [scene-dsl](https://github.com/secorolab/scene-dsl)
+  - [RobBDD](https://github.com/minhnh/robbdd)
+- Other Python dependencies include RDFLib, textX, Trinary, PyYAML, NumPy, and SciPy.
+- ROS dependencies include `rclpy`, `ament_index_python`, `rosidl_runtime_py`,
+  [`simulation_interfaces`](https://github.com/ros-simulation/simulation_interfaces),
+  [`bdd_ros2_interfaces`](https://github.com/minhnh/bdd_ros2_interfaces),
+  `builtin_interfaces`, `geometry_msgs`, `std_msgs`, and `unique_identifier_msgs`.
+- The visualizer requires [PySide6](https://pypi.org/project/PySide6/).
 
 ## Quick start
 
-A mockup setup is available for testing communication between the test coordinator node with
-a mockup behaviour action server, which cycle through a pick & place state machine and publishes
+A mockup setup is available for testing communication between the test coordinator node and
+a mockup behaviour action server, which cycles through a pick-and-place state machine and publishes
 the expected events and trinary messages. A more detailed tutorial on the interactions of these
 components is available on the [`bdd-dsl` landing page](https://secorolab.github.io/bdd-dsl/).
 
@@ -50,44 +55,72 @@ To run the mockup setup:
 
 ### BDD Test Coordinator
 
-[`bdd_coordination_node.py`](./bdd_exec_ros2/executables/bdd_coordination_node.py) loads BDD model
-(as RDF graph or RobBDD) and, when triggered, send goal for each scenario variation to a
-[behaviour action server](https://github.com/minhnh/bdd_ros2_interfaces/blob/-/action/Behaviour.action).
+[`bdd_coordination_node.py`](./bdd_exec_ros2/executables/bdd_coordination_node.py) loads BDD models
+from RDF graphs or RobBDD sources and, when triggered, sends a goal for each scenario variation to a
+[behaviour action server](https://github.com/minhnh/bdd_ros2_interfaces/blob/main/action/Behaviour.action).
+
+### Simulation Interface Test
+
+[`sim_interface_test.py`](./bdd_exec_ros2/executables/sim_interface_test.py) is an interactive
+reference client that showcases the main `SimInterface` APIs:
+
+| Command | `SimInterface` API | Purpose |
+| --- | --- | --- |
+| `list-features` | `get_sim_features()` | Display the simulator's advertised capabilities and spawn formats. |
+| `load-scene` | `setup_scene()` | Load or reset a world and spawn the selected SceneX instance. |
+| `get-pose` | `get_element_pose()` | Query the current stamped pose of a scene element. |
+| `reset` | `reset_simulation()` | Perform a basic simulation reset. |
+
+The tool assumes a running simulator with a working ROS 2 `simulation_interfaces` setup, such as
+one provided by Gazebo or Isaac Sim. It does not start or configure the simulator itself.
+
+Set the installed example path and inspect the simulator:
+
+```bash
+MODEL="$(ros2 pkg prefix bdd_exec_ros2)/share/bdd_exec_ros2/models/robbdd/lab.scenex"
+
+ros2 run bdd_exec_ros2 sim_interface_test list-features
+ros2 run bdd_exec_ros2 sim_interface_test load-scene --scene-model "$MODEL"
+ros2 run bdd_exec_ros2 sim_interface_test get-pose \
+  --scene-model "$MODEL" --element-id lab_env:dex_cube
+ros2 run bdd_exec_ros2 sim_interface_test reset
+```
+
+`get-pose` expands `--element-id` as a CURIE using the SceneX graph namespaces and queries an
+already-loaded entity; it does not load or reset the scene. Use `--service-namespace` when the
+simulation services are namespaced, and `--world-entity-name` when the simulator's world entity is
+not named `world`.
 
 ### Test Result Visualizer
 
-The [`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) script visualizes trinaries and clause assertions
-for each executed scenario variations. A successful (mockup) test execution should appear like the following:
+The [`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) script visualizes trinaries and
+clause assertions for each executed scenario variation. A successful mockup test execution should
+appear like the following:
 
 ![Visualizer screenshot](./docs/visualizer-sceenshot.png)
 
 ### Mockup Behaviour Server
 
 [mockup_behaviour_node.py](./bdd_exec_ros2/executables/mockup_behaviour_node.py) cycles through states of a
-finite-state-machine (FSM) for a pick & place behaviour, while sending events and trinary messages as expected by
+finite-state machine (FSM) for a pick-and-place behaviour while sending events and trinary messages expected by
 the BDD coordinator node. The [FSM Python implementation](./bdd_exec_ros2/behaviours/fsm_pickplace.py) is generated
 from the [FSM model](./models/pickplace.fsm) using [coord-dsl](https://github.com/secorolab/coord-dsl).
 
-## Virtual environment setup with ROS2
+## Virtual environment setup with ROS 2
 
-If you want to setup a [ROS2 Python virtual environment](https://docs.ros.org/en/rolling/How-To-Guides/Using-Python-Packages.html),
-you'd need to allow using the ROS2 Python packages in the environment, e.g. with
+To set up a [ROS 2 Python virtual environment](https://docs.ros.org/en/jazzy/How-To-Guides/Using-Python-Packages.html),
+allow the environment to use the system ROS 2 Python packages, for example with
 [`uv`](https://docs.astral.sh/uv) in `zsh`:
 
 ```sh
-source /opt/ros/rolling/setup.zsh
+source /opt/ros/jazzy/setup.zsh
 cd $ROS_WS_HOME  # where the 'src' folder is located
 uv venv --system-site-packages venv
 touch ./venv/COLCON_IGNORE
 colcon build
 ```
 
-Additionally you'd need to add the following to `setup.cfg`, if you specify `entry_points` in `setup.py`:
-
-```ini
-[build_scripts]
-executable = /usr/bin/env python3
-```
+The included `setup.cfg` installs Python entry points in the location expected by ROS 2.
 
 Now you can activate both environments with:
 
