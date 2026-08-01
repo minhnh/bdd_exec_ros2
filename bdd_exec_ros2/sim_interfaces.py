@@ -39,6 +39,7 @@ from simulation_interfaces.srv import (
     GetSimulationState,
     GetSimulatorFeatures,
     LoadWorld,
+    ResetSimulation,
     SetSimulationState,
     SpawnEntities,
     SpawnEntity,
@@ -81,6 +82,7 @@ class SimInterface:
     _load_world_srv_client: Client
     _get_sim_state_srv_client: Client
     _set_sim_state_srv_client: Client
+    _reset_simulation_srv_client: Client
     _sim_feature_srv_client: Client
     _sim_features: SimulatorFeatures | None
 
@@ -93,6 +95,7 @@ class SimInterface:
         load_world_srv_name: str = "load_world",
         get_sim_state_srv_name: str = "get_simulation_state",
         set_sim_state_srv_name: str = "set_simulation_state",
+        reset_simulation_srv_name: str = "reset_simulation",
         spawn_entity_srv_name: str = "spawn_entity",
         spawn_entities_srv_name: str = "spawn_entities",
         model_graph: Graph | None = None,
@@ -106,6 +109,7 @@ class SimInterface:
         self._logger: RcutilsLogger = node.get_logger()
         self._model_graph = model_graph
         self._sim_features = None
+        self._active_scene_inst_id: URIRef | None = None
 
         sim_feat_srv_full = _service_name(self.ns, sim_feature_srv_name)
         self._logger.info(f"Listening to service: {sim_feat_srv_full}")
@@ -137,6 +141,11 @@ class SimInterface:
         self._set_sim_state_srv_client = node.create_client(
             srv_type=SetSimulationState,
             srv_name=set_sim_state_srv_full,
+        )
+
+        self._reset_simulation_srv_client = node.create_client(
+            srv_type=ResetSimulation,
+            srv_name=_service_name(self.ns, reset_simulation_srv_name),
         )
 
         self._spawn_entity_srv_client = node.create_client(
@@ -292,6 +301,43 @@ class SimInterface:
             )
         return path
 
+    async def reset_simulation(self) -> None:
+        features = await self.get_sim_features(quiet=False)
+        if (
+            features is None
+            or SimulatorFeatures.SIMULATION_RESET not in features.features
+        ):
+            raise RuntimeError("simulator does not support resetting simulation")
+        if not self._reset_simulation_srv_client.wait_for_service(
+            timeout_sec=self.timeout
+        ):
+            raise TimeoutError(
+                f"Timed out waiting for reset_simulation after {self.timeout}s"
+            )
+
+        future = self._reset_simulation_srv_client.call_async(
+            ResetSimulation.Request(scope=ResetSimulation.Request.SCOPE_DEFAULT)
+        )
+        timer = self._node.create_timer(self.timeout, future.cancel)
+        try:
+            response = await future
+        finally:
+            self._node.destroy_timer(timer)
+
+        if response is None:
+            raise TimeoutError(f"reset_simulation timed out after {self.timeout}s")
+        if response.result.result != Result.RESULT_OK:
+            raise RuntimeError(
+                f"reset_simulation failed ({response.result.result}): "
+                f"{response.result.error_message}"
+            )
+
+        state = await self.get_sim_state()
+        if state.state == SimulationState.STATE_PLAYING:
+            await self.set_sim_state(
+                SimulationState(state=SimulationState.STATE_STOPPED)
+            )
+
     async def _send_spawn_entries(
         self,
         entries: list[tuple[URIRef, SpawnEntityMsg]],
@@ -409,5 +455,9 @@ class SimInterface:
             additional_elements=additional_elements,
             warn=self._logger.warning,
         )
-        await self.load_world(scene_inst)
+        if self._active_scene_inst_id == scene_inst.id:
+            await self.reset_simulation()
+        else:
+            await self.load_world(scene_inst)
+            self._active_scene_inst_id = scene_inst.id
         return await self._send_spawn_entries(entries, features)
