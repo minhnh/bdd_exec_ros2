@@ -1,5 +1,14 @@
 import "lab.scene"
 
+distrib (ns=scene_lab_isaac) object-position {
+    uniform {
+        dimension: 3
+        lower: (-0.3, -0.3, 0.1)
+        upper: (0.3, 0.3, 0.2)
+    }
+}
+distrib (ns=scene_lab_isaac) object-orientation { uniform-rotation }
+
 scene inst (ns=scene_lab_isaac) pickplace_scene_mjc {
     scene: <pickplace_scene>
     kgraph (ns=scene_lab_isaac) pickplace_graph {
@@ -23,9 +32,25 @@ scene inst (ns=scene_lab_isaac) pickplace_scene_mjc {
                 pose on_table { wrt: <table.surface> xyz: (0.4, 0.0, 0.1) m orientation: euler { angles: (0.0, 0.0, 0.0) } }
             }
         }
+        body tomato_soup_can {
+            frame center {
+                pose on_table { wrt: <table.surface> xyz: sample <object-position> m orientation: quat { sample <object-orientation> } }
+            }
+        }
+        body mustard_bottle {
+            frame center {
+                pose on_table { wrt: <table.surface> xyz: sample <object-position> m orientation: quat { sample <object-orientation> } }
+            }
+        }
+        body dex_cube {
+            frame center {
+                pose on_table { wrt: <table.surface> xyz: sample <object-position> m orientation: quat { sample <object-orientation> } }
+            }
+        }
     }
     model pickplace-mjc as usd {
         ros pkg = "bdd_exec_ros2", path = "models/panda_moveit.usd"
+        map body <pickplace_graph.world> to "world"
         map body <pickplace_graph.table> to "/background/table_low_327"
     }
 
@@ -39,6 +64,24 @@ scene inst (ns=scene_lab_isaac) pickplace_scene_mjc {
         model box2-usd as usd {
             sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
             map body <pickplace_graph.box2>
+        }
+    }
+    obj <pickplace_objects.tomato_soup_can> {
+        model tomato-soup-can-usd as usd {
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd'
+            map body <pickplace_graph.tomato_soup_can>
+        }
+    }
+    obj <pickplace_objects.mustard_bottle> {
+        model mustard-bottle-usd as usd {
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned_Physics/006_mustard_bottle.usd'
+            map body <pickplace_graph.mustard_bottle>
+        }
+    }
+    obj <pickplace_objects.dex_cube> {
+        model dex-cube-usd as usd {
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd'
+            map body <pickplace_graph.dex_cube>
         }
     }
 }

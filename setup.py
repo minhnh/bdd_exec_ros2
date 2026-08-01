@@ -27,9 +27,12 @@ setup(
     install_requires=[
         "setuptools",
         "pyside6",
+        "numpy",
+        "scipy>=1.16",
         # Requires source install from GitHub
         "rdf_utils",
         "bdd_dsl",
+        "scene-dsl",
         "robbdd",
     ],
     zip_safe=True,

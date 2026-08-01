@@ -12,23 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from enum import StrEnum
 from pathlib import Path
 
 from ament_index_python import get_package_share_directory
 from rclpy.client import Client
 from rclpy.impl.rcutils_logger import RcutilsLogger
 from rclpy.node import Node
-from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
+from rdf_utils.models.vocab import (
+    URI_EXEC_PRED_PATH,
+)
+from rdflib import Graph, URIRef
 from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
-from scene_dsl.rdf_parser.scenex import SceneInstanceModel, get_ros_pkg_path
-from simulation_interfaces.msg import Result, SimulationState, SimulatorFeatures
+from scene_dsl.rdf_parser.scenex import (
+    SceneInstanceModel,
+    get_ros_pkg_path,
+)
+from simulation_interfaces.msg import (
+    Result,
+    SimulationState,
+    SimulatorFeatures,
+)
+from simulation_interfaces.msg import (
+    SpawnEntity as SpawnEntityMsg,
+)
 from simulation_interfaces.srv import (
     GetSimulationState,
     GetSimulatorFeatures,
     LoadWorld,
     SetSimulationState,
+    SpawnEntities,
+    SpawnEntity,
 )
+
+from bdd_exec_ros2.conversions import create_spawn_entity_entries
 
 FEATURE_NAMES = {
     value: name
@@ -37,25 +53,31 @@ FEATURE_NAMES = {
 }
 
 
-class SceneFormat(StrEnum):
-    USD = "usd"
-    URDF = "urdf"
-    MJCF = "mjcf"
-
-
 SUPPORTED_FORMAT_URIS = {
-    SceneFormat.USD: URI_USD_STAGE,
-    SceneFormat.URDF: URI_URDF_ROBOT,
-    SceneFormat.MJCF: URI_MJCF_MUJOCO,
+    "usd": URI_USD_STAGE,
+    "urdf": URI_URDF_ROBOT,
+    "mjcf": URI_MJCF_MUJOCO,
 }
 
 
-class SimInterface:
-    ns: str
-    timeout: float
+def _service_name(namespace: str, name: str) -> str:
+    return f"{namespace.rstrip('/')}/{name}" if namespace else name
 
-    _logger: RcutilsLogger
-    _node: Node
+
+def _require_supported_resource_types(features: SimulatorFeatures) -> set[URIRef]:
+    resource_types = {
+        resource_type
+        for format_name in features.spawn_formats
+        if (resource_type := SUPPORTED_FORMAT_URIS.get(format_name)) is not None
+    }
+    if not resource_types:
+        raise RuntimeError(
+            f"unhandled simulator spawn formats: {features.spawn_formats}"
+        )
+    return resource_types
+
+
+class SimInterface:
     _load_world_srv_client: Client
     _get_sim_state_srv_client: Client
     _set_sim_state_srv_client: Client
@@ -71,14 +93,21 @@ class SimInterface:
         load_world_srv_name: str = "load_world",
         get_sim_state_srv_name: str = "get_simulation_state",
         set_sim_state_srv_name: str = "set_simulation_state",
+        spawn_entity_srv_name: str = "spawn_entity",
+        spawn_entities_srv_name: str = "spawn_entities",
+        model_graph: Graph | None = None,
+        world_entity_name: str = "world",
     ) -> None:
-        self.ns = ns
-        self.timeout = timeout
-        self._node = node
-        self._logger = node.get_logger()
+        self.ns: str = ns
+        self.timeout: float = timeout
+        self.world_entity_name: str = world_entity_name
 
-        sim_feat_srv_full = f"{self.ns}/{sim_feature_srv_name}"
+        self._node: Node = node
+        self._logger: RcutilsLogger = node.get_logger()
+        self._model_graph = model_graph
         self._sim_features = None
+
+        sim_feat_srv_full = _service_name(self.ns, sim_feature_srv_name)
         self._logger.info(f"Listening to service: {sim_feat_srv_full}")
         self._sim_feature_srv_client = node.create_client(
             srv_type=GetSimulatorFeatures,
@@ -89,25 +118,34 @@ class SimInterface:
                 f"Timed out waiting for '{sim_feat_srv_full}' after {self.timeout}s"
             )
 
-        load_world_srv_full = f"{self.ns}/{load_world_srv_name}"
+        load_world_srv_full = _service_name(self.ns, load_world_srv_name)
         self._logger.info(f"Listening to service: {load_world_srv_full}")
         self._load_world_srv_client = node.create_client(
             srv_type=LoadWorld,
             srv_name=load_world_srv_full,
         )
 
-        get_sim_state_srv_full = f"{self.ns}/{get_sim_state_srv_name}"
+        get_sim_state_srv_full = _service_name(self.ns, get_sim_state_srv_name)
         self._logger.info(f"Listening to service: {get_sim_state_srv_full}")
         self._get_sim_state_srv_client = node.create_client(
             srv_type=GetSimulationState,
             srv_name=get_sim_state_srv_full,
         )
 
-        set_sim_state_srv_full = f"{self.ns}/{set_sim_state_srv_name}"
+        set_sim_state_srv_full = _service_name(self.ns, set_sim_state_srv_name)
         self._logger.info(f"Listening to service: {set_sim_state_srv_full}")
         self._set_sim_state_srv_client = node.create_client(
             srv_type=SetSimulationState,
             srv_name=set_sim_state_srv_full,
+        )
+
+        self._spawn_entity_srv_client = node.create_client(
+            srv_type=SpawnEntity,
+            srv_name=_service_name(self.ns, spawn_entity_srv_name),
+        )
+        self._spawn_entities_srv_client = node.create_client(
+            srv_type=SpawnEntities,
+            srv_name=_service_name(self.ns, spawn_entities_srv_name),
         )
 
     async def get_sim_features(self, quiet=True) -> SimulatorFeatures | None:
@@ -200,33 +238,26 @@ class SimInterface:
         if features is None or SimulatorFeatures.WORLD_LOADING not in features.features:
             raise RuntimeError("simulator does not support world loading")
 
-        resource_types = {
-            resource_type
-            for format_name in features.spawn_formats
-            if (resource_type := SUPPORTED_FORMAT_URIS.get(format_name)) is not None
-        }
-        if len(resource_types) < 1:
-            raise RuntimeError(
-                f"unhandled simulator spawn formats: {features.spawn_formats}"
-            )
+        resource_types = _require_supported_resource_types(features)
 
-        resources = [
+        resources = tuple(
             model
             for model in scene_inst.models.values()
-            if resource_types.intersection(model.types)
-        ]
+            if model.types & resource_types
+        )
         if not resources:
             return None
         if len(resources) > 1:
             raise ValueError(
                 f"SceneInstance '{scene_inst.id}': ambiguous supported scene models: "
-                f"{[model.id for model in resources]}"
+                f"{[resource.id for resource in resources]}"
             )
 
-        path_str = resources[0].get_attr(URI_EXEC_PRED_PATH)
+        resource = resources[0]
+        path_str = resource.get_attr(URI_EXEC_PRED_PATH)
         if not isinstance(path_str, str):
-            raise TypeError(f"scene model {resources[0].id} has no path")
-        ros_pkg_path = get_ros_pkg_path(resources[0])
+            raise TypeError(f"scene model {resource.id} has no path")
+        ros_pkg_path = get_ros_pkg_path(resource)
         path = (
             Path(get_package_share_directory(ros_pkg_path[0])) / ros_pkg_path[1]
             if ros_pkg_path is not None
@@ -260,3 +291,123 @@ class SimInterface:
                 f"load_world failed ({response.result.result}): {response.result.error_message}"
             )
         return path
+
+    async def _send_spawn_entries(
+        self,
+        entries: list[tuple[URIRef, SpawnEntityMsg]],
+        features: SimulatorFeatures,
+    ) -> dict[URIRef, str]:
+        if not entries:
+            return {}
+
+        responses = []
+        if (
+            SimulatorFeatures.SPAWNING_ENTITIES in features.features
+            and self._spawn_entities_srv_client.wait_for_service(
+                timeout_sec=self.timeout
+            )
+        ):
+            request = SpawnEntities.Request()
+            request.spawn_requests = [msg for _, msg in entries]
+            future = self._spawn_entities_srv_client.call_async(request)
+            timer = self._node.create_timer(self.timeout, future.cancel)
+            try:
+                response = await future
+            finally:
+                self._node.destroy_timer(timer)
+            if response is None:
+                raise TimeoutError(f"spawn_entities timed out after {self.timeout}s")
+            if len(response.results) != len(entries):
+                raise RuntimeError(
+                    f"spawn_entities returned {len(response.results)} results for {len(entries)} requests"
+                )
+            responses = response.results
+            aggregate_ok = response.result.result == Result.RESULT_OK
+            results_ok = all(
+                result.result.result == Result.RESULT_OK for result in responses
+            )
+            if aggregate_ok != results_ok:
+                raise RuntimeError(
+                    "spawn_entities aggregate result disagrees with entity results"
+                )
+        elif SimulatorFeatures.SPAWNING in features.features:
+            if not self._spawn_entity_srv_client.wait_for_service(
+                timeout_sec=self.timeout
+            ):
+                raise TimeoutError(
+                    f"Timed out waiting for spawn_entity after {self.timeout}s"
+                )
+            for _, msg in entries:
+                future = self._spawn_entity_srv_client.call_async(
+                    SpawnEntity.Request(
+                        name=msg.name,
+                        allow_renaming=msg.allow_renaming,
+                        uri=msg.entity_resource.uri,
+                        resource_string=msg.entity_resource.resource_string,
+                        entity_namespace=msg.entity_namespace,
+                        initial_pose=msg.initial_pose,
+                    )
+                )
+                timer = self._node.create_timer(self.timeout, future.cancel)
+                try:
+                    response = await future
+                finally:
+                    self._node.destroy_timer(timer)
+                if response is None:
+                    raise TimeoutError(f"spawn_entity timed out after {self.timeout}s")
+                responses.append(response)
+        else:
+            raise RuntimeError("simulator does not support spawning entities")
+
+        spawned = {}
+        for (elem_id, _), response in zip(entries, responses):
+            if response.result.result != Result.RESULT_OK:
+                message = (
+                    f"failed to spawn '{elem_id}' ({response.result.result}): "
+                    f"{response.result.error_message}"
+                )
+                self._logger.warning(message)
+                continue
+            spawned[elem_id] = response.entity_name
+        return spawned
+
+    async def spawn_entities(
+        self,
+        scene_inst: SceneInstanceModel,
+        *,
+        additional_elements: set[URIRef] | None = None,
+    ) -> dict[URIRef, str]:
+        if self._model_graph is None:
+            raise RuntimeError("spawning requires a model graph")
+        features = await self.get_sim_features(quiet=False)
+        assert features is not None
+        entries = create_spawn_entity_entries(
+            scene_inst,
+            self._model_graph,
+            _require_supported_resource_types(features),
+            world_entity_name=self.world_entity_name,
+            additional_elements=additional_elements,
+            warn=self._logger.warning,
+        )
+        return await self._send_spawn_entries(entries, features)
+
+    async def setup_scene(
+        self,
+        scene_inst: SceneInstanceModel,
+        *,
+        additional_elements: set[URIRef] | None = None,
+    ) -> dict[URIRef, str]:
+        if self._model_graph is None:
+            raise RuntimeError("scene setup requires a model graph")
+        features = await self.get_sim_features(quiet=False)
+        assert features is not None
+        entries = create_spawn_entity_entries(
+            scene_inst,
+            self._model_graph,
+            _require_supported_resource_types(features),
+            world_entity_name=self.world_entity_name,
+            additional_elements=additional_elements,
+            warn=self._logger.warning,
+        )
+        await self.load_world(scene_inst)
+        return await self._send_spawn_entries(entries, features)

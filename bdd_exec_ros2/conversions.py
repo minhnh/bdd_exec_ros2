@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Final
 from uuid import UUID
 
+import numpy as np
+from ament_index_python import get_package_share_directory
 from bdd_dsl.models.clauses import WhenBehaviourModel, get_clause_config
 from bdd_dsl.models.observation import (
     ObservationManager,
@@ -46,7 +49,19 @@ from bdd_ros2_interfaces.msg import (
 )
 from builtin_interfaces.msg import Time as TimeMsg
 from rclpy.time import Time
-from rdflib import URIRef
+from rdf_utils.models.execution import get_attr_path
+from rdf_utils.models.geom_coord import get_transform_between_frames
+from rdf_utils.models.vocab import URI_GEOM_TYPE_KTREE, URI_GEOM_TYPE_RIGID_BODY
+from rdf_utils.naming import get_valid_var_name
+from rdflib import Graph, URIRef
+from scene_dsl.rdf_parser.ktree import get_root_frame
+from scene_dsl.rdf_parser.scenex import (
+    SceneInstanceModel,
+    get_kinematic_mappings,
+    get_ros_pkg_path,
+)
+from scipy.spatial.transform import RigidTransform
+from simulation_interfaces.msg import SpawnEntity as SpawnEntityMsg
 from trinary import Trinary, Unknown
 from unique_identifier_msgs.msg import UUID as UUIDMsg
 
@@ -56,6 +71,134 @@ TRINARY_NAMES = {
     TrinaryMsg.FALSE: "FALSE",
     TrinaryMsg.UNKNOWN: "UNKNOWN",
 }
+
+
+def create_spawn_entity_msg(
+    name: str,
+    resource_uri: str,
+    transform: RigidTransform,
+    frame_id: str,
+) -> SpawnEntityMsg:
+    msg = SpawnEntityMsg()
+    msg.name = name
+    msg.allow_renaming = False
+    msg.entity_resource.uri = resource_uri
+    msg.initial_pose.header.frame_id = frame_id
+    msg.initial_pose.pose.position.x = float(transform.translation[0])
+    msg.initial_pose.pose.position.y = float(transform.translation[1])
+    msg.initial_pose.pose.position.z = float(transform.translation[2])
+    quaternion = transform.rotation.as_quat()
+    msg.initial_pose.pose.orientation.x = float(quaternion[0])
+    msg.initial_pose.pose.orientation.y = float(quaternion[1])
+    msg.initial_pose.pose.orientation.z = float(quaternion[2])
+    msg.initial_pose.pose.orientation.w = float(quaternion[3])
+    return msg
+
+
+def create_spawn_entity_entries(
+    scene_inst: SceneInstanceModel,
+    graph: Graph,
+    resource_types: set[URIRef],
+    *,
+    world_entity_name: str = "world",
+    additional_elements: set[URIRef] | None = None,
+    warn: Callable[[str], object] | None = None,
+) -> list[tuple[URIRef, SpawnEntityMsg]]:
+    """Create spawn messages and retain their source scene element IDs."""
+    if not resource_types:
+        raise ValueError("resource_types must not be empty")
+
+    world_body = scene_inst.get_body_for_resource_entity(world_entity_name, graph)
+    if world_body is None:
+        raise ValueError(
+            f"SceneInstance '{scene_inst.id}' has no body mapped to "
+            f"simulator world entity '{world_entity_name}'"
+        )
+
+    rng = np.random.default_rng()
+    entries = []
+    element_ids = (
+        scene_inst.scene_model.objects
+        | scene_inst.scene_model.agents
+        | (additional_elements or set())
+    )
+    for elem_id in element_ids:
+        element = scene_inst.object_models.get(elem_id)
+        if element is None:
+            element = scene_inst.agent_models.get(elem_id)
+        if element is None:
+            if warn is not None:
+                warn(f"element '{elem_id}' has no executable model")
+            continue
+
+        elem_models = [
+            elem_model
+            for elem_model in element.values()
+            if elem_model.types & resource_types
+        ]
+        if not elem_models:
+            if warn is not None:
+                warn(f"element '{elem_id}' has no compatible resource")
+            continue
+        if len(elem_models) != 1:
+            raise ValueError(
+                f"element '{elem_id}' has ambiguous compatible resource models"
+            )
+
+        resource = elem_models[0]
+        mappings = [
+            mapping
+            for mapping in get_kinematic_mappings(resource)
+            if mapping.target_type in {URI_GEOM_TYPE_RIGID_BODY, URI_GEOM_TYPE_KTREE}
+        ]
+        if not mappings:
+            if warn is not None:
+                warn(f"resource '{resource.id}' has no mapping")
+            continue
+        if len(mappings) > 1:
+            raise ValueError(f"resource '{resource.id}' has ambiguous mappings")
+
+        mapping = mappings[0]
+        sim_entity = mapping.entity
+        if sim_entity is None:
+            sim_entity = get_valid_var_name(elem_id.n3(graph.namespace_manager))
+            if warn is not None:
+                warn(
+                    f"no sim entity specified for mapping of {elem_id}, "
+                    f"converted from URI: {sim_entity}"
+                )
+
+        root = get_root_frame(mapping.target_id, graph)
+        transform = get_transform_between_frames(
+            root.id, world_body.root_frame.id, graph, rng=rng
+        )
+        if transform is None:
+            if warn is not None:
+                warn(f"element '{elem_id}' has no pose path to '{world_entity_name}'")
+            continue
+
+        ros_path = get_ros_pkg_path(resource)
+        if ros_path is not None:
+            resource_uri = (
+                Path(get_package_share_directory(ros_path[0])) / ros_path[1]
+            ).as_uri()
+        else:
+            resource_uri = get_attr_path(resource)
+            if not resource_uri.startswith(("http://", "https://")):
+                resource_uri = Path(resource_uri).expanduser().resolve().as_uri()
+
+        entries.append(
+            (
+                elem_id,
+                create_spawn_entity_msg(
+                    sim_entity,
+                    resource_uri,
+                    transform,
+                    frame_id=world_entity_name,
+                ),
+            )
+        )
+    return entries
 
 
 def ros_time_to_stamp(t: Time) -> float:

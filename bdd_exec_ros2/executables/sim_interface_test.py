@@ -1,3 +1,17 @@
+# Copyright 2026 Minh Nguyen
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Inspect a simulator or load a SceneInstance through simulation_interfaces."""
 
 import argparse
@@ -8,8 +22,6 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
-from rdf_utils.models.vocab import URI_EXEC_TYPE_SCENE_INST
-from rdflib import RDF, URIRef
 from scene_dsl.langs import scenex_metamodel
 from scene_dsl.rdf.scenex import create_scenex_model_graph
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
@@ -42,6 +54,11 @@ def _parse_args(args=None):
         default=None,
         help="executable Scene DSL model",
     )
+    parser.add_argument(
+        "--world-entity-name",
+        default="world",
+        help="scene resource entity mapped to the simulator world frame",
+    )
     options = parser.parse_args(args)
     if options.command == Command.LOAD_SCENE and options.scene_model is None:
         parser.error("load-scene requires --scene-model")
@@ -56,8 +73,18 @@ def main(args=None):
 
     rclpy.init(args=raw_args)
     node = Node("sim_interface_test", namespace=options.service_namespace)
-    sim_intf = SimInterface(node=node)
     try:
+        graph = None
+        if options.command == Command.LOAD_SCENE:
+            model = scenex_metamodel().model_from_file(options.scene_model)
+            graph = create_scenex_model_graph(model)
+
+        sim_intf = SimInterface(
+            node=node,
+            model_graph=graph,
+            world_entity_name=options.world_entity_name,
+        )
+
         if options.command == Command.LIST_FEATURES:
             task = rclpy.get_global_executor().create_task(
                 sim_intf.get_sim_features(quiet=False)
@@ -75,21 +102,12 @@ def main(args=None):
             return
 
         if options.command == Command.LOAD_SCENE:
-            model = scenex_metamodel().model_from_file(options.scene_model)
-            graph = create_scenex_model_graph(model)
-            scene_ids = list(
-                graph.subjects(RDF.type, URI_EXEC_TYPE_SCENE_INST, unique=True)
-            )
-            if len(scene_ids) != 1:
-                raise ValueError(f"expected one scene instance URI, found {scene_ids}")
-            scn_inst_id = scene_ids[0]
-            assert isinstance(scn_inst_id, URIRef)
-
-            scene = SceneInstanceModel(scn_inst_id=scn_inst_id, graph=graph)
-            task = rclpy.get_global_executor().create_task(sim_intf.load_world(scene))
+            if not model.scene_insts:
+                raise ValueError(f"'{options.scene_model}' has no scene instances")
+            scene = SceneInstanceModel(model.scene_insts[0].uri, graph)
+            task = rclpy.get_global_executor().create_task(sim_intf.setup_scene(scene))
             rclpy.spin_until_future_complete(node, task)
-            path = task.result()
-            node.get_logger().info(f"Loaded world {path}")
+            node.get_logger().info(f"Spawned entities {task.result()}")
             return
 
         raise ValueError(f"unhandled command: {options.command}")
