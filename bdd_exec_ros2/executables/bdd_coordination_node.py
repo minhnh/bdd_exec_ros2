@@ -347,22 +347,23 @@ class BddCoordNode(Node):
             del ctx_fc_dict[context_id]
 
     def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
-        assert topic_name in self._topic_fpolicy_reg, (
-            f"no policy registered for topic: {topic_name}"
-        )
-
-        forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
-        trin_st, ctx_uuid = from_trin_stamped_msg(msg)
-
         with self._scr_lock:
+            if topic_name not in self._topic_fpolicy_reg:
+                self.get_logger().error(f"no policy registered for topic: {topic_name}")
+                return
+
             trin_val = msg.trinary.value
             if trin_val not in TRINARY_NAMES:
                 trin_rep = f"{trin_val} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
                 self.get_logger().error(
                     f"Policy assertion callback: no name found for trinary value [{trin_rep}]"
                 )
-            else:
-                trin_rep = f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
+                return
+
+            trin_rep = f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
+
+            forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
+            trin_st, ctx_uuid = from_trin_stamped_msg(msg)
 
             if forward_to_all:
                 self.get_logger().warning(
@@ -412,27 +413,28 @@ class BddCoordNode(Node):
             "currently only support TrinaryStamped policy assertions"
         )
 
-        if topic_name not in self._topic_fpolicy_reg:
-            self._topic_fpolicy_reg[topic_name] = {}
-        if context_id not in self._topic_fpolicy_reg[topic_name]:
-            self._topic_fpolicy_reg[topic_name][context_id] = set()
-        self._topic_fpolicy_reg[topic_name][context_id].add(model.id)
+        with self._scr_lock:
+            if topic_name not in self._topic_fpolicy_reg:
+                self._topic_fpolicy_reg[topic_name] = {}
+            if context_id not in self._topic_fpolicy_reg[topic_name]:
+                self._topic_fpolicy_reg[topic_name][context_id] = set()
+            self._topic_fpolicy_reg[topic_name][context_id].add(model.id)
 
-        if topic_name in self._fpolicy_subs:
-            self.get_logger().info(
-                f"not creating new subscription for '{model.id.n3(self.graph.namespace_manager)}' on topic '{topic_name}'"
+            if topic_name in self._fpolicy_subs:
+                self.get_logger().info(
+                    f"not creating new subscription for '{model.id.n3(self.graph.namespace_manager)}' on topic '{topic_name}'"
+                )
+                return
+
+            self._fpolicy_subs[topic_name] = self.create_subscription(
+                msg_type=msg_type,
+                topic=topic_name,
+                callback=lambda msg: self._update_fpolicy_assertion(
+                    topic_name=topic_name, msg=msg
+                ),
+                callback_group=self._obs_cb_group,
+                qos_profile=10,
             )
-            return
-
-        self._fpolicy_subs[topic_name] = self.create_subscription(
-            msg_type=msg_type,
-            topic=topic_name,
-            callback=lambda msg: self._update_fpolicy_assertion(
-                topic_name=topic_name, msg=msg
-            ),
-            callback_group=self._obs_cb_group,
-            qos_profile=10,
-        )
 
     def _create_scenario_context(
         self, scr_var: ScenarioVariantModel, val_dict: dict[URIRef, Any]
@@ -476,17 +478,17 @@ class BddCoordNode(Node):
         scr_context_id = context.context_id
         val_dict = context.variation_params
 
-        # Publish scenario start event
-        self._send_event(
-            evt_uri=context.obs_manager.scenario_exec.start_event, ctx_id=scr_context_id
-        )
-
         goal_msg = Behaviour.Goal()
         goal_msg.scenario_context_id = to_uuid_msg(scr_context_id)
         goal_msg.parameters = get_bhv_param_messages(scr_var.when_bhv_model, val_dict)
         goal_msg.configs = get_cfg_messages(scr_var=scr_var, var_value_dict=val_dict)
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
+
+        # Publish scenario start event
+        self._send_event(
+            evt_uri=context.obs_manager.scenario_exec.start_event, ctx_id=scr_context_id
+        )
 
         # Send goal asynchronously
         send_goal_future = self._action_client.send_goal_async(
@@ -501,6 +503,10 @@ class BddCoordNode(Node):
     def _schedule_next_scenario(self) -> None:
         if self._scene_setup_mode is not SceneSetupMode.SIMULATION:
             return
+        executor = self.executor
+        if executor is None:
+            raise RuntimeError("coordinator is not attached to an executor")
+
         with self._scr_lock:
             if (
                 self._scene_setup_active
@@ -510,17 +516,17 @@ class BddCoordNode(Node):
                 return
             self._scene_setup_active = True
 
-        executor = self.executor
-        if executor is None:
-            self._scene_setup_active = False
-            raise RuntimeError("coordinator is not attached to an executor")
         executor.create_task(self._prepare_next_scenario())
 
     async def _prepare_next_scenario(self) -> None:
         assert self._sim_interface is not None
         try:
-            while self._pending_scenarios and not self._scenario_contexts:
-                scr_var, val_dict = self._pending_scenarios.popleft()
+            while True:
+                with self._scr_lock:
+                    if not self._pending_scenarios or self._scenario_contexts:
+                        break
+                    scr_var, val_dict = self._pending_scenarios.popleft()
+
                 context = self._create_scenario_context(scr_var, val_dict)
                 additional_elements: set[URIRef] = set()
                 for value in val_dict.values():
@@ -534,47 +540,52 @@ class BddCoordNode(Node):
                         additional_elements=additional_elements,
                     )
                 except Exception as exc:  # noqa: BLE001 - skip failed setup and continue
-                    self._remove_context_topic_reg(context.context_id)
+                    with self._scr_lock:
+                        self._remove_context_topic_reg(context.context_id)
                     self.get_logger().error(
                         f"Scene setup failed for '{scr_var.id}': {exc}"
                     )
                     continue
 
                 self._start_scenario_variant(context, scr_var)
-                return
+                break
         finally:
             with self._scr_lock:
                 self._scene_setup_active = False
 
+        # Scheduling is ignored while _scene_setup_active is true. Retry after
+        # clearing it in case the started scenario already completed.
+        self._schedule_next_scenario()
+
     def _status_timer_callback(self):
-        if len(self._scenario_contexts) == 0:
-            # no scenarios
-            self._schedule_next_scenario()
-            return
-
-        now = self.get_clock().now()
-        status_msg = ScenarioStatusList()
-        status_msg.stamp = now.to_msg()
-        status_msg.scenarios = []
-
-        finished_ids = set()
-        for ctx_id, scr_ctx in self._scenario_contexts.items():
-            scr_status = to_scenario_status_msg(
-                ctx_id=ctx_id,
-                obs_manager=scr_ctx.obs_manager,
-                scr_rep=scr_ctx.scr_rep,
-                now=now,
-                trinaries_policy=trin_policy_and,
-            )
-            status_msg.scenarios.append(scr_status)
-
-            # if finished remove from active scenarios
-            if scr_ctx.obs_manager.scr_end_time is not None:
-                finished_ids.add(ctx_id)
-
         with self._scr_lock:
+            if not self._scenario_contexts:
+                # no scenarios
+                return
+
+            now = self.get_clock().now()
+            status_msg = ScenarioStatusList()
+            status_msg.stamp = now.to_msg()
+            status_msg.scenarios = []
+
+            finished_ids = set()
+            for ctx_id, scr_ctx in self._scenario_contexts.items():
+                scr_status = to_scenario_status_msg(
+                    ctx_id=ctx_id,
+                    obs_manager=scr_ctx.obs_manager,
+                    scr_rep=scr_ctx.scr_rep,
+                    now=now,
+                    trinaries_policy=trin_policy_and,
+                )
+                status_msg.scenarios.append(scr_status)
+
+                # if finished remove from active scenarios
+                if scr_ctx.obs_manager.scr_end_time is not None:
+                    finished_ids.add(ctx_id)
+
             for ctx_id in finished_ids:
                 self.get_logger().info(f"Scenario {ctx_id.hex} completed, removing...")
+                self._remove_context_topic_reg(context_id=ctx_id)
                 del self._scenario_contexts[ctx_id]
 
         self._scr_status_pub.publish(status_msg)
@@ -603,10 +614,12 @@ class BddCoordNode(Node):
                 var_val_dicts = get_task_var_dicts(scr_var.task_variation)
                 for val_dict in var_val_dicts:
                     if self._scene_setup_mode is SceneSetupMode.SIMULATION:
-                        self._pending_scenarios.append((scr_var, val_dict))
+                        with self._scr_lock:
+                            self._pending_scenarios.append((scr_var, val_dict))
                     else:
                         context = self._create_scenario_context(scr_var, val_dict)
                         self._start_scenario_variant(context, scr_var)
+
         self._schedule_next_scenario()
 
     def evt_sub_cb(self, msg: Event):
@@ -641,20 +654,25 @@ class BddCoordNode(Node):
     def bhv_goal_resp_cb(self, future, context_id: UUID):
         goal_handle = future.result()
 
-        assert context_id in self._scenario_contexts, "context ID not found"
-        ctx = self._scenario_contexts[context_id]
+        with self._scr_lock:
+            if context_id not in self._scenario_contexts:
+                self.get_logger().error(
+                    f"Goal response callback received unknown context ID: {context_id}"
+                )
+                return
 
-        if not goal_handle.accepted:
-            self.get_logger().error(f"Goal rejected for {context_id}, removing context")
-            with self._scr_lock:
+            ctx = self._scenario_contexts[context_id]
+
+            if not goal_handle.accepted:
+                self.get_logger().error(
+                    f"Goal rejected for {context_id}, ending scenario"
+                )
                 self._send_event(
                     evt_uri=ctx.obs_manager.scenario_exec.end_event, ctx_id=context_id
                 )
-                self._remove_context_topic_reg(context_id=context_id)
-            return
+                return
 
-        self.get_logger().info(f"Goal accepted for {context_id}")
-        with self._scr_lock:
+            self.get_logger().info(f"Goal accepted for {context_id}")
             ctx.goal_handle = goal_handle
 
         self._get_result_future = goal_handle.get_result_async()
@@ -679,9 +697,11 @@ class BddCoordNode(Node):
             self.get_logger().error(
                 f"Behaviour result callback: invalid trinary value '{trin_val}' for '{context_id.hex}'"
             )
+            trin_st = None
         else:
+            trin_st, _ = from_trin_stamped_msg(result.result)
             self.get_logger().info(
-                f"Result received for {context_id.hex}: {TRINARY_NAMES[result.result.trinary.value]}"
+                f"Result received for {context_id.hex}: {TRINARY_NAMES[trin_val]}"
             )
 
         with self._scr_lock:
@@ -690,13 +710,13 @@ class BddCoordNode(Node):
                     f"Result callback: context {context_id} not found"
                 )
                 return
+
             ctx = self._scenario_contexts[context_id]
+            if trin_st is not None:
+                ctx.obs_manager.update_bhv_result(trin_st=trin_st)
             self._send_event(
                 evt_uri=ctx.obs_manager.scenario_exec.end_event, ctx_id=context_id
             )
-            trin_st, _ = from_trin_stamped_msg(result.result)
-            ctx.obs_manager.update_bhv_result(trin_st=trin_st)
-            self._remove_context_topic_reg(context_id=context_id)
 
 
 def main(args=None):

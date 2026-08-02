@@ -21,6 +21,7 @@ from uuid import uuid4
 from bdd_ros2_interfaces.msg import ScenarioStatus
 from rdflib import URIRef
 
+from bdd_exec_ros2.conversions import TRINARY_NAMES
 from bdd_exec_ros2.executables.bdd_coordination_node import (
     BddCoordNode,
     SceneSetupMode,
@@ -137,6 +138,7 @@ def test_scene_setup_failure_cleans_up_and_continues():
         _create_scenario_context=Mock(side_effect=[failed_context, started_context]),
         _remove_context_topic_reg=Mock(),
         _start_scenario_variant=Mock(),
+        _schedule_next_scenario=Mock(),
         get_logger=Mock(return_value=Mock()),
     )
 
@@ -151,6 +153,7 @@ def test_scene_setup_failure_cleans_up_and_continues():
         started_context, started_variation
     )
     assert not node._scene_setup_active
+    node._schedule_next_scenario.assert_called_once_with()
 
 
 def test_completed_context_advances_the_setup_queue():
@@ -164,6 +167,7 @@ def test_completed_context_advances_the_setup_queue():
     node = _node(
         _scenario_contexts={context_id: context},
         _scr_lock=threading.Lock(),
+        _remove_context_topic_reg=Mock(),
         _scr_status_pub=Mock(),
         _schedule_next_scenario=Mock(),
         get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=now))),
@@ -177,4 +181,45 @@ def test_completed_context_advances_the_setup_queue():
         node._status_timer_callback()
 
     assert node._scenario_contexts == {}
+    node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
     node._schedule_next_scenario.assert_called_once_with()
+
+
+def test_behaviour_result_is_recorded_before_scenario_ends():
+    context_id = uuid4()
+    trinary = SimpleNamespace(value=next(iter(TRINARY_NAMES)))
+    result = SimpleNamespace(
+        result=SimpleNamespace(
+            scenario_context_id=object(),
+            trinary=trinary,
+        )
+    )
+    obs_manager = SimpleNamespace(
+        scenario_exec=SimpleNamespace(end_event=URIRef("urn:test:end")),
+        update_bhv_result=Mock(),
+    )
+    node = _node(
+        _scenario_contexts={context_id: SimpleNamespace(obs_manager=obs_manager)},
+        _scr_lock=threading.Lock(),
+        _send_event=Mock(
+            side_effect=lambda **_: obs_manager.update_bhv_result.assert_called_once()
+        ),
+        get_logger=Mock(return_value=Mock()),
+    )
+
+    with (
+        patch(
+            "bdd_exec_ros2.executables.bdd_coordination_node.from_uuid_msg",
+            return_value=context_id,
+        ),
+        patch(
+            "bdd_exec_ros2.executables.bdd_coordination_node.from_trin_stamped_msg",
+            return_value=(object(), context_id),
+        ),
+    ):
+        node.bhv_result_cb(
+            SimpleNamespace(result=Mock(return_value=SimpleNamespace(result=result))),
+            context_id,
+        )
+
+    node._send_event.assert_called_once()
