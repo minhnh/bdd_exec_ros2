@@ -15,7 +15,12 @@ import time
 from random import random
 
 import rclpy
-from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_AGN, URI_BHV_PRED_TARGET_OBJ
+from bdd_dsl.models.observation import EntityObservation
+from bdd_dsl.models.urirefs import (
+    URI_BHV_PRED_TARGET_AGN,
+    URI_BHV_PRED_TARGET_OBJ,
+    URI_BHV_PRED_TARGET_WS,
+)
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import Event, Trinary, TrinaryStamped
 from coord_dsl.event_loop import reconfig_event_buffers
@@ -25,6 +30,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rdf_utils.namespace import URL_SECORO_M
 from rdflib import Graph, Namespace, URIRef
+from vision_msgs.msg import Detection3D
 
 from bdd_exec_ros2.behaviours.fsm_pickplace import (
     EVENT_URIS,
@@ -32,11 +38,15 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import (
     StateID,
     create_fsm,
 )
+from bdd_exec_ros2.observation import (
+    detection3d_stamp,
+    map_detection3d_entity_by_dict,
+)
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
 TOPIC_LOCATED_PICK = "/obs_policy/located_at_pick_ws"
 TOPIC_IS_HELD = "/obs_policy/is_held"
-TOPIC_LOCATED_PLACE = "/obs_policy/located_at_place_ws"
+TOPIC_DETECTIONS_3D = "/obs_policy/detections_3d"
 
 NS_M_TMPL = Namespace(f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/")
 NS_M_ENV_SECORO = Namespace(f"{URL_SECORO_M}/environments/secorolab/")
@@ -45,6 +55,29 @@ NS_MANAGER = Graph().namespace_manager
 NS_MANAGER.bind("env-secoro", NS_M_ENV_SECORO)
 NS_MANAGER.bind("agn-isaac", NS_M_AGN_ISAAC)
 NS_MANAGER.bind("tmpl", NS_M_TMPL)
+
+MOCKUP_DETECTION3D_ENTITY_URIS = {
+    entity_id: NS_M_ENV_SECORO[entity_id]
+    for entity_id in (
+        "tomato_soup_can",
+        "mustard_bottle",
+        "dex_cube",
+        "box1_ws",
+        "box2_ws",
+    )
+}
+MOCKUP_ENTITY_DETECTION3D_IDS = {
+    uri: entity_id for entity_id, uri in MOCKUP_DETECTION3D_ENTITY_URIS.items()
+}
+
+
+def map_detection3d_entity_mockup(observation: Detection3D) -> list[EntityObservation]:
+    return map_detection3d_entity_by_dict(observation, MOCKUP_DETECTION3D_ENTITY_URIS)
+
+
+TOPIC_OBSERVATION_ADAPTERS = {
+    Detection3D: (detection3d_stamp, map_detection3d_entity_mockup)
+}
 
 
 EXPORTED_EVENTS = {
@@ -216,9 +249,20 @@ class MockupBhvNode(Node):
         self.is_held_pub = self.create_publisher(
             msg_type=TrinaryStamped, topic=TOPIC_IS_HELD, qos_profile=10
         )
-        self.located_place_pub = self.create_publisher(
-            msg_type=TrinaryStamped, topic=TOPIC_LOCATED_PLACE, qos_profile=10
+        self.detections_pub = self.create_publisher(
+            msg_type=Detection3D, topic=TOPIC_DETECTIONS_3D, qos_profile=10
         )
+
+    def _publish_detection(self, entity_uri: URIRef) -> None:
+        detection_id = MOCKUP_ENTITY_DETECTION3D_IDS.get(entity_uri)
+        if detection_id is None:
+            self.get_logger().warning(f"No Detection3D ID for {entity_uri}")
+            return
+        detection = Detection3D()
+        detection.header.stamp = self.get_clock().now().to_msg()
+        detection.id = detection_id
+        detection.bbox.center.orientation.w = 1.0
+        self.detections_pub.publish(detection)
 
     def cancel_callback(self, goal_handle):
         self.get_logger().info("Canceling goal...")
@@ -235,6 +279,8 @@ class MockupBhvNode(Node):
 
         agn_str = None
         obj_str = None
+        object_uris = []
+        workspace_uris = []
         for param_val in goal_handle.request.parameters:
             rel_uri = URIRef(param_val.param_rel_uri)
             self.get_logger().info(f"- Parameter relation: {rel_uri.n3(NS_MANAGER)}")
@@ -246,7 +292,11 @@ class MockupBhvNode(Node):
                 self.get_logger().info(f"  + Parameter value: {val_uri.n3(NS_MANAGER)}")
 
             if rel_uri == URI_BHV_PRED_TARGET_OBJ:
+                object_uris = val_uris
                 obj_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
+
+            if rel_uri == URI_BHV_PRED_TARGET_WS:
+                workspace_uris = val_uris
 
             if rel_uri == URI_BHV_PRED_TARGET_AGN:
                 agn_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
@@ -287,8 +337,8 @@ class MockupBhvNode(Node):
             response.result.trinary = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
                 goal_handle.succeed()
-                trinary_msg.stamp = self.get_clock().now().to_msg()
-                self.located_place_pub.publish(trinary_msg)
+                for entity_uri in [*object_uris, *workspace_uris]:
+                    self._publish_detection(entity_uri)
                 return response
 
             if goal_handle.is_cancel_requested:

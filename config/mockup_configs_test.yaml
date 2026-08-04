@@ -1,5 +1,6 @@
 /bdd_test/test_coordinator:
   ros__parameters:
+    topic_observation_adapters: "bdd_exec_ros2.executables.mockup_behaviour_node:TOPIC_OBSERVATION_ADAPTERS"
     event_topic: "/bdd_test/events"
     use_sim_time: False
 /bdd_test/mockup_behaviour:

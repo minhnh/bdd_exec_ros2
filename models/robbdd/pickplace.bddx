@@ -12,10 +12,22 @@ obs policy (ns=bdd_exec_ros) fcx-located-before-topic
 {
     trinary topic: "/obs_policy/located_at_pick_ws"
 }
-obs policy (ns=bdd_exec_ros) fcx-located-after-topic
+obs provider (ns=bdd_exec_ros) detections-3d {
+    ros topic: "/obs_policy/detections_3d"
+    type: "vision_msgs/msg/Detection3D"
+}
+obs policy (ns=bdd_exec_ros) fcx-located-after-detections
     for <tmpl_pickplace.fc-located-after>
 {
-    trinary topic: "/obs_policy/located_at_place_ws"
+    observation object-pose {
+        provider: <detections-3d>
+        observes: <tmpl_pickplace.target_object>
+    }
+    observation workspace-pose {
+        provider: <detections-3d>
+        observes: <tmpl_pickplace.place_ws>
+    }
+    py { module: bdd_exec_ros2.observation, attr: poses_are_collocated }
 }
 Scenario Exec (ns=bdd_exec) pickplace-mockup-ros {
     variant: <sim_pickplace.pickplace_table>
@@ -23,6 +35,6 @@ Scenario Exec (ns=bdd_exec) pickplace-mockup-ros {
     bhv: <mockup-pp-server>
     policies: {
         <fcx-located-before-topic>,
-        <fcx-located-after-topic>
+        <fcx-located-after-detections>
     }
 }

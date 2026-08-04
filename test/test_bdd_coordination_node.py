@@ -18,13 +18,20 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
+from bdd_dsl.models.urirefs import (
+    URI_ROS_PRED_CHNL_NAME,
+    URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_TYPE_TOPIC,
+)
 from bdd_ros2_interfaces.msg import ScenarioStatus
 from rdflib import URIRef
+from vision_msgs.msg import Detection3D
 
 from bdd_exec_ros2.conversions import TRINARY_NAMES
 from bdd_exec_ros2.executables.bdd_coordination_node import (
     BddCoordNode,
     SceneSetupMode,
+    _load_topic_observation_adapters,
 )
 
 
@@ -223,3 +230,68 @@ def test_behaviour_result_is_recorded_before_scenario_ends():
         )
 
     node._send_event.assert_called_once()
+
+
+def test_topic_observation_forwards_raw_message_with_receipt_stamp():
+    provider_uri = URIRef("urn:test:provider")
+    context_id = uuid4()
+    topic_key = ("observations", object)
+    obs_manager = SimpleNamespace(update_provider_observation=Mock())
+    node = _node(
+        _scr_lock=threading.Lock(),
+        _scenario_contexts={context_id: SimpleNamespace(obs_manager=obs_manager)},
+        _topic_observation_reg={topic_key: {context_id: {provider_uri}}},
+        get_clock=Mock(
+            return_value=SimpleNamespace(
+                now=Mock(return_value=SimpleNamespace(nanoseconds=7_000_000_000))
+            )
+        ),
+    )
+    msg = SimpleNamespace()
+
+    node._update_observation(topic_key, msg)
+
+    obs_manager.update_provider_observation.assert_called_once_with(
+        provider_uri, msg, 7.0
+    )
+
+
+def test_topic_provider_uses_its_message_type_adapter():
+    provider_uri = URIRef("urn:test:provider")
+    context_id = uuid4()
+    msg_type = type("TestMessage", (), {})
+    timestamp_extractor = Mock()
+    entity_mapper = Mock()
+    obs_manager = SimpleNamespace(register_provider=Mock())
+    provider = SimpleNamespace(
+        id=provider_uri,
+        types={URI_ROS_TYPE_TOPIC},
+        get_attr=lambda key: {
+            URI_ROS_PRED_CHNL_NAME: "observations",
+            URI_ROS_PRED_TYPE_NAME: msg_type,
+        }[key],
+    )
+    node = _node(
+        _topic_observation_adapters={msg_type: (timestamp_extractor, entity_mapper)},
+        _topic_observation_reg={},
+        _observation_subs={},
+        _scr_lock=threading.Lock(),
+        _obs_cb_group=object(),
+        create_subscription=Mock(return_value=object()),
+    )
+
+    node._create_observation_subscription(provider, context_id, obs_manager)
+
+    obs_manager.register_provider.assert_called_once_with(
+        provider_uri, timestamp_extractor, entity_mapper
+    )
+
+
+def test_topic_observation_adapter_module_attribute_loads_mockup_adapter():
+    adapters = _load_topic_observation_adapters(
+        "bdd_exec_ros2.executables.mockup_behaviour_node:TOPIC_OBSERVATION_ADAPTERS"
+    )
+
+    timestamp_extractor, entity_mapper = adapters[Detection3D]
+    assert callable(timestamp_extractor)
+    assert callable(entity_mapper)

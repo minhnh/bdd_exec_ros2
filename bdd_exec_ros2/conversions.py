@@ -30,6 +30,7 @@ from bdd_dsl.models.urirefs import (
     URI_BDD_TYPE_CONFIG,
     URI_BHV_PRED_TARGET_AGN,
     URI_BHV_PRED_TARGET_OBJ,
+    URI_BHV_PRED_TARGET_WS,
     URI_BHV_TYPE_PICK,
     URI_BHV_TYPE_PLACE,
 )
@@ -265,7 +266,10 @@ def get_bhv_param_messages(
     when_bhv: WhenBehaviourModel, var_value_dict: dict[URIRef, Any]
 ) -> list[ParamValue]:
     param_vals = []
-    if URI_BHV_TYPE_PICK or URI_BHV_TYPE_PLACE in when_bhv.types:
+    if (
+        URI_BHV_TYPE_PICK in when_bhv.behaviour.types
+        or URI_BHV_TYPE_PLACE in when_bhv.behaviour.types
+    ):
         obj_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_OBJ)
         assert obj_var_uri is not None
         assert obj_var_uri in var_value_dict, f"no value for '{obj_var_uri}'"
@@ -281,6 +285,16 @@ def get_bhv_param_messages(
         param_vals.append(
             to_paramval_message(
                 rel_uri=URI_BHV_PRED_TARGET_AGN, val=var_value_dict[agn_var_uri]
+            )
+        )
+
+    if URI_BHV_TYPE_PLACE in when_bhv.behaviour.types:
+        ws_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_WS)
+        assert ws_var_uri is not None
+        assert ws_var_uri in var_value_dict, f"no value for '{ws_var_uri}'"
+        param_vals.append(
+            to_paramval_message(
+                rel_uri=URI_BHV_PRED_TARGET_WS, val=var_value_dict[ws_var_uri]
             )
         )
 
