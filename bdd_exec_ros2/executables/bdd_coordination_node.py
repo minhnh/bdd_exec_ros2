@@ -16,12 +16,18 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
+from importlib import import_module
 from typing import Any
 from uuid import UUID, uuid4
 
 import rclpy
 from ament_index_python import get_package_share_directory
-from bdd_dsl.models.observation import ObservationManager, trin_policy_and
+from bdd_dsl.models.observation import (
+    EntityObservationMapperProtocol,
+    ObservationManager,
+    TimestampedObservationProtocol,
+    trin_policy_and,
+)
 from bdd_dsl.models.urirefs import (
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_PRED_TYPE_NAME,
@@ -83,6 +89,34 @@ __DEFAULT_NODE_NAME = "test_coordinator"
 class SceneSetupMode(StrEnum):
     NONE = "none"
     SIMULATION = "simulation"
+
+
+def _load_topic_observation_adapters(
+    module_attr: str,
+) -> dict[
+    type, tuple[TimestampedObservationProtocol, EntityObservationMapperProtocol | None]
+]:
+    module_name, separator, attr_name = module_attr.partition(":")
+    if not separator or not module_name or not attr_name:
+        raise ValueError(
+            "topic_observation_adapters must be a 'module:attribute' reference"
+        )
+    adapters = getattr(import_module(module_name), attr_name)
+    if not isinstance(adapters, dict):
+        raise TypeError("topic_observation_adapters attribute must be a dict")
+    for message_type, adapter in adapters.items():
+        if not isinstance(adapter, tuple) or len(adapter) != 2:
+            raise TypeError(
+                f"adapter for {message_type} must be a (timestamp, mapper) tuple"
+            )
+        timestamp_extractor, entity_mapper = adapter
+        if not callable(timestamp_extractor) or (
+            entity_mapper is not None and not callable(entity_mapper)
+        ):
+            raise TypeError(
+                f"adapter for {message_type} contains a non-callable extractor"
+            )
+    return adapters
 
 
 def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
@@ -175,6 +209,12 @@ class BddCoordNode(Node):
     _obs_cb_group: MutuallyExclusiveCallbackGroup
     _topic_fpolicy_reg: dict[str, dict[UUID, set[URIRef]]]
     _fpolicy_subs: dict[str, Subscription]
+    _topic_observation_reg: dict[tuple[str, type], dict[UUID, set[URIRef]]]
+    _observation_subs: dict[tuple[str, type], Subscription]
+    _topic_observation_adapters: dict[
+        type,
+        tuple[TimestampedObservationProtocol, EntityObservationMapperProtocol | None],
+    ]
 
     _action_client: ActionClient
     _evt_pub: Publisher
@@ -184,6 +224,7 @@ class BddCoordNode(Node):
     def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
         super().__init__(node_name)
         self.timeout_sec = timeout_sec
+        self._topic_observation_adapters = {}
 
         self.declare_parameter("bhv_server_name", "bhv_server")
         self.declare_parameter("start_test_topic", "start")
@@ -194,6 +235,14 @@ class BddCoordNode(Node):
         self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE.value)
         self.declare_parameter("simulation_service_namespace", "/")
         self.declare_parameter("world_entity_name", "world")
+        self.declare_parameter("topic_observation_adapters", "")
+        adapter_ref = self.get_parameter("topic_observation_adapters").value
+        if not isinstance(adapter_ref, str):
+            raise TypeError("topic_observation_adapters must be a string")
+        if adapter_ref:
+            self._topic_observation_adapters = _load_topic_observation_adapters(
+                adapter_ref
+            )
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
@@ -298,6 +347,8 @@ class BddCoordNode(Node):
 
         # Observation
         self._fpolicy_subs = {}
+        self._topic_observation_reg = {}
+        self._observation_subs = {}
 
     def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
         mode_value = self.get_parameter("scene_setup_mode").value
@@ -345,6 +396,26 @@ class BddCoordNode(Node):
             if context_id not in ctx_fc_dict:
                 continue
             del ctx_fc_dict[context_id]
+        for ctx_provider_dict in self._topic_observation_reg.values():
+            ctx_provider_dict.pop(context_id, None)
+
+    def _update_observation(self, topic_key: tuple[str, type], msg: Any) -> None:
+        receipt_stamp = ros_time_to_stamp(self.get_clock().now())
+        with self._scr_lock:
+            routes = tuple(
+                (self._scenario_contexts[context_id].obs_manager, provider_uri)
+                for context_id, providers in self._topic_observation_reg.get(
+                    topic_key, {}
+                ).items()
+                if context_id in self._scenario_contexts
+                for provider_uri in providers
+            )
+
+        for obs_manager, provider_uri in routes:
+            with self._scr_lock:
+                obs_manager.update_provider_observation(
+                    provider_uri, msg, receipt_stamp
+                )
 
     def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
         with self._scr_lock:
@@ -436,6 +507,37 @@ class BddCoordNode(Node):
                 qos_profile=10,
             )
 
+    def _create_observation_subscription(
+        self, provider: ModelBase, context_id: UUID, obs_manager: ObservationManager
+    ) -> None:
+        if URI_ROS_TYPE_TOPIC not in provider.types:
+            return
+
+        topic_name = provider.get_attr(key=URI_ROS_PRED_CHNL_NAME)
+        msg_type = provider.get_attr(key=URI_ROS_PRED_TYPE_NAME)
+        assert isinstance(topic_name, str) and msg_type is not None, (
+            f"invalid attrs for {provider.id}: topic={topic_name}, msg_type={msg_type}"
+        )
+        adapter = self._topic_observation_adapters.get(msg_type)
+        if adapter is None:
+            obs_manager.register_provider(provider.id)
+        else:
+            obs_manager.register_provider(provider.id, *adapter)
+        topic_key = (topic_name, msg_type)
+
+        with self._scr_lock:
+            providers = self._topic_observation_reg.setdefault(topic_key, {})
+            providers.setdefault(context_id, set()).add(provider.id)
+            if topic_key in self._observation_subs:
+                return
+            self._observation_subs[topic_key] = self.create_subscription(
+                msg_type=msg_type,
+                topic=topic_name,
+                callback=lambda msg: self._update_observation(topic_key, msg),
+                callback_group=self._obs_cb_group,
+                qos_profile=10,
+            )
+
     def _create_scenario_context(
         self, scr_var: ScenarioVariantModel, val_dict: dict[URIRef, Any]
     ) -> ScenarioContext:
@@ -452,6 +554,19 @@ class BddCoordNode(Node):
                 ),
             ],
         )
+        obs_manager.bind_observation_targets(val_dict)
+
+        provider_uris = {
+            provider_uri
+            for policy in obs_manager.obs_policies.values()
+            for provider_uri in policy.observation_providers.values()
+        }
+        for provider_uri in provider_uris:
+            provider = ModelBase(node_id=provider_uri, graph=self.graph)
+            load_ros_topic_model(graph=self.graph, model=provider)
+            self._create_observation_subscription(
+                provider=provider, context_id=scr_context_id, obs_manager=obs_manager
+            )
 
         scr_rep = ScenarioVariantRep(
             scr_var=scr_var,
