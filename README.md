@@ -23,7 +23,8 @@ A GUI tool is also available for visualizing test results.
 A mockup setup is available for testing communication between the test coordinator node and
 a mockup behaviour action server, which cycles through a pick-and-place state machine and publishes
 the expected events and trinary messages. A more detailed tutorial on the interactions of these
-components is available on the [`bdd-dsl` landing page](https://secorolab.github.io/bdd-dsl/).
+components, including observation providers and simulation-backed execution, is available in the
+[`bdd-dsl` execution tutorial](https://secorolab.github.io/bdd-dsl/bdd-tutorial-execution.html).
 
 To run the mockup setup:
 
@@ -64,6 +65,10 @@ Set it to `simulation` to prepare variations sequentially through `SimInterface`
 loads or resets the exact scene instance, spawns its invariant and variable-selected elements, and
 starts the behaviour only after setup succeeds. `simulation_service_namespace` defaults to `/`, and
 `world_entity_name` defaults to `world`.
+
+The complete observation-provider contract, `ObservationManager` API, evaluator forms, and
+simulation polling lifecycle are documented in the
+[`bdd-dsl` execution tutorial](https://secorolab.github.io/bdd-dsl/bdd-tutorial-execution.html).
 
 For example, with a working simulator exposing ROS 2 `simulation_interfaces` services:
 
