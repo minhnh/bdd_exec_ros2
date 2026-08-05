@@ -21,6 +21,7 @@ from uuid import uuid4
 from bdd_dsl.models.urirefs import (
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER,
     URI_ROS_TYPE_TOPIC,
 )
 from bdd_ros2_interfaces.msg import ScenarioStatus
@@ -338,6 +339,57 @@ def test_topic_observation_adapter_module_attribute_loads_mockup_adapter():
     timestamp_extractor, entity_mapper = adapters[Detection3D]
     assert callable(timestamp_extractor)
     assert callable(entity_mapper)
+
+
+def test_create_scenario_context_binds_and_resolves_simulation_targets():
+    provider_uri = URIRef("urn:test:provider")
+    observation_uri = URIRef("urn:test:observation")
+    target_variable = URIRef("urn:test:target-variable")
+    modelled_element = URIRef("urn:test:modelled-element")
+    scene_instance = SimpleNamespace(
+        resolve_modelled_element_id=Mock(return_value=modelled_element)
+    )
+    provider = SimpleNamespace(types={URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER})
+    obs_manager = SimpleNamespace(
+        scenario_exec=SimpleNamespace(scene_instance=scene_instance),
+        providers={provider_uri: provider},
+        bind_observation_targets=Mock(),
+        observation_targets_for_provider=Mock(
+            return_value={observation_uri: target_variable}
+        ),
+        register_provider=Mock(),
+    )
+    variation = SimpleNamespace()
+    bindings = {target_variable: URIRef("urn:test:bound-target")}
+    node = _node(
+        graph=Graph(),
+        _ns_manager=Graph().namespace_manager,
+        _clause_rep_builder=object(),
+        _create_observation_subscription=Mock(),
+    )
+
+    with (
+        patch(
+            "bdd_exec_ros2.executables.bdd_coordination_node.ObservationManager.from_scenario_variant",
+            return_value=obs_manager,
+        ),
+        patch(
+            "bdd_exec_ros2.executables.bdd_coordination_node.ScenarioVariantRep",
+            return_value=object(),
+        ),
+        patch(
+            "bdd_exec_ros2.executables.bdd_coordination_node.get_update_rate",
+            return_value=5.0,
+        ),
+    ):
+        context = node._create_scenario_context(variation, bindings)
+
+    obs_manager.bind_observation_targets.assert_called_once_with(bindings)
+    scene_instance.resolve_modelled_element_id.assert_called_once_with(target_variable)
+    assert context.scene_inst is scene_instance
+    assert context.simulation_observations == {
+        provider_uri: (5.0, {target_variable: modelled_element})
+    }
 
 
 def test_simulation_provider_forwards_pose_snapshot_atomically():
