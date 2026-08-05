@@ -106,10 +106,11 @@ def create_spawn_entity_entries(
     if not resource_types:
         raise ValueError("resource_types must not be empty")
 
+    ns_manager = graph.namespace_manager
     world_body = scene_inst.get_body_for_resource_entity(world_entity_name, graph)
     if world_body is None:
         raise ValueError(
-            f"SceneInstance '{scene_inst.id}' has no body mapped to "
+            f"SceneInstance '{scene_inst.id.n3(ns_manager)}' has no body mapped to "
             f"simulator world entity '{world_entity_name}'"
         )
 
@@ -125,17 +126,17 @@ def create_spawn_entity_entries(
         if resolved is None:
             if warn is not None:
                 warn(
-                    f"element '{elem_id}' has no compatible mapped kinematics resource"
+                    f"element '{elem_id.n3(ns_manager)}' has no compatible mapped kinematics resource"
                 )
             continue
 
         resource, mapping, root = resolved
         sim_entity = mapping.entity
         if sim_entity is None:
-            sim_entity = get_valid_var_name(elem_id.n3(graph.namespace_manager))
+            sim_entity = get_valid_var_name(elem_id.n3(ns_manager))
             if warn is not None:
                 warn(
-                    f"no sim entity specified for mapping of {elem_id}, "
+                    f"no sim entity specified for mapping of {elem_id.n3(ns_manager)}, "
                     f"converted from URI: {sim_entity}"
                 )
 
@@ -144,7 +145,9 @@ def create_spawn_entity_entries(
         )
         if transform is None:
             if warn is not None:
-                warn(f"element '{elem_id}' has no pose path to '{world_entity_name}'")
+                warn(
+                    f"element '{elem_id.n3(ns_manager)}' has no pose path to '{world_entity_name}'"
+                )
             continue
 
         ros_path = get_ros_pkg_path(resource)

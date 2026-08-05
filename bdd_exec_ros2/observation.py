@@ -21,6 +21,7 @@ from bdd_dsl.models.urirefs import (
     URI_ROS_TYPE_ACTION,
     URI_ROS_TYPE_TOPIC,
 )
+from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 from rdf_utils.models.common import ModelBase
 from rdflib import Graph, Literal, URIRef
@@ -77,6 +78,23 @@ def map_detection3d_entity_by_dict(
     if entity_uri is None:
         return []
     return [EntityObservation(entity_uri, observation.bbox.center)]
+
+
+def simulation_pose_snapshot_stamp(
+    poses: Mapping[URIRef, PoseStamped], receipt_stamp: float
+) -> float:
+    source_stamps = (
+        ros_time_to_stamp(Time.from_msg(pose.header.stamp)) for pose in poses.values()
+    )
+    return max((stamp for stamp in source_stamps if stamp), default=receipt_stamp)
+
+
+def map_simulation_pose_snapshot(
+    poses: Mapping[URIRef, PoseStamped],
+) -> list[EntityObservation]:
+    return [
+        EntityObservation(entity_uri, pose.pose) for entity_uri, pose in poses.items()
+    ]
 
 
 def poses_are_collocated(observations: list[ObservationStamped]) -> bool:

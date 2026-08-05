@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -81,6 +82,22 @@ class _Node:
 
     def destroy_timer(self, timer):
         pass
+
+
+class _PollingNode:
+    def __init__(self):
+        self.executor = SimpleNamespace(create_task=asyncio.create_task)
+        self.timer = object()
+        self.timer_callback = None
+        self.destroyed_timers = []
+
+    def create_timer(self, timeout, callback):
+        self.timer_period = timeout
+        self.timer_callback = callback
+        return self.timer
+
+    def destroy_timer(self, timer):
+        self.destroyed_timers.append(timer)
 
 
 def _scene_with_models(models, scene_id="urn:test:scene"):
@@ -344,33 +361,40 @@ def test_spawn_entities_falls_back_when_batch_service_is_unavailable():
     assert len(interface._spawn_entity_srv_client.requests) == len(scene.object_models)
 
 
-def test_get_element_pose_queries_resolved_entity_and_preserves_header():
+def test_get_elements_poses_batches_resolved_entities_and_preserves_headers():
     features = SimpleNamespace(
         features=[SimulatorFeatures.ENTITY_STATE_GETTING], spawn_formats=["usd"]
     )
     interface, scene = _spawn_interface(features)
-    element_id = next(iter(scene.object_models))
-    state = EntityState(
-        header=Header(frame_id="world"),
-        pose=Pose(),
-    )
+    element_ids = list(scene.object_models)
+    entities = []
+    for element_id in element_ids:
+        resolved = scene.resolve_element_root_frame(
+            element_id,
+            {SUPPORTED_FORMAT_URIS["usd"]},
+            interface._model_graph,
+        )
+        assert resolved is not None and resolved[1].entity is not None
+        entities.append(resolved[1].entity)
+    states = [
+        EntityState(header=Header(frame_id=entity), pose=Pose()) for entity in entities
+    ]
     result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
-    interface._get_entity_state_srv_client = _Client(
-        SimpleNamespace(result=result, state=state)
+    interface._get_entities_states_srv_client = _Client(
+        SimpleNamespace(result=result, entities=entities[::-1], states=states[::-1])
     )
 
-    pose = asyncio.run(interface.get_element_pose(scene, element_id))
+    poses = asyncio.run(interface.get_elements_poses(scene, element_ids))
 
-    resolved = scene.resolve_element_root_frame(
-        element_id,
-        {SUPPORTED_FORMAT_URIS["usd"]},
-        interface._model_graph,
-    )
-    assert resolved is not None
-    assert interface._get_entity_state_srv_client.request.entity == resolved[1].entity
+    assert set(poses) == set(element_ids)
+    assert {pose.header.frame_id for pose in poses.values()} == set(entities)
+    entity_filter = interface._get_entities_states_srv_client.request.filters.filter
+    assert all(re.fullmatch(entity_filter, entity) for entity in entities)
+    assert re.fullmatch(entity_filter, "unrequested-entity") is None
+    assert len(interface._get_entities_states_srv_client.requests) == 1
+
+    pose = asyncio.run(interface.get_element_pose(scene, element_ids[0]))
     assert pose is not None
-    assert pose.header == state.header
-    assert pose.pose == state.pose
 
 
 def test_get_element_pose_returns_none_when_element_or_entity_is_missing():
@@ -379,7 +403,7 @@ def test_get_element_pose_returns_none_when_element_or_entity_is_missing():
     )
     interface, scene = _spawn_interface(features)
     result = SimpleNamespace(result=Result.RESULT_NOT_FOUND, error_message="")
-    interface._get_entity_state_srv_client = _Client(SimpleNamespace(result=result))
+    interface._get_entities_states_srv_client = _Client(SimpleNamespace(result=result))
 
     assert (
         asyncio.run(
@@ -387,11 +411,57 @@ def test_get_element_pose_returns_none_when_element_or_entity_is_missing():
         )
         is None
     )
-    assert not interface._get_entity_state_srv_client.requests
+    assert not interface._get_entities_states_srv_client.requests
 
     element_id = next(iter(scene.object_models))
     assert asyncio.run(interface.get_element_pose(scene, element_id)) is None
-    assert len(interface._get_entity_state_srv_client.requests) == 1
+    assert len(interface._get_entities_states_srv_client.requests) == 1
+
+
+def test_pose_polling_delivers_snapshots_without_overlapping_requests():
+    async def exercise():
+        interface = SimInterface.__new__(SimInterface)
+        interface._node = _PollingNode()
+        interface._logger = SimpleNamespace(warning=lambda message: None)
+        scene = object()
+        element_ids = {URIRef("urn:test:first"), URIRef("urn:test:second")}
+        poses = {element_id: Pose() for element_id in element_ids}
+        request_started = asyncio.Event()
+        release_request = asyncio.Event()
+        calls = []
+
+        async def get_elements_poses(request_scene, request_ids):
+            calls.append((request_scene, request_ids))
+            request_started.set()
+            await release_request.wait()
+            return poses
+
+        interface.get_elements_poses = get_elements_poses
+        received = []
+        frequency = 4.0
+        handle = interface.start_pose_polling(
+            scene, element_ids, frequency, received.append
+        )
+        await request_started.wait()
+
+        interface._node.timer_callback()
+        await asyncio.sleep(0)
+        assert len(calls) == 1
+
+        release_request.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert received == [poses]
+        assert calls[0] == (scene, frozenset(element_ids))
+        assert interface._node.timer_period == 1.0 / frequency
+
+        handle.cancel()
+        interface._node.timer_callback()
+        await asyncio.sleep(0)
+        assert len(calls) == 1
+        assert interface._node.destroyed_timers == [interface._node.timer]
+
+    asyncio.run(exercise())
 
 
 def test_reset_simulation_uses_default_scope_and_stops_playing_simulation():

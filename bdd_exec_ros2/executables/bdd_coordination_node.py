@@ -31,6 +31,7 @@ from bdd_dsl.models.observation import (
 from bdd_dsl.models.urirefs import (
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER,
     URI_ROS_TYPE_TOPIC,
 )
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
@@ -56,6 +57,7 @@ from bdd_ros2_interfaces.msg import (
     ScenarioStatusList,
     TrinaryStamped,
 )
+from geometry_msgs.msg import PoseStamped
 from rclpy.action.client import ActionClient, ClientGoalHandle
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException
@@ -65,7 +67,9 @@ from rclpy.subscription import Subscription
 from rclpy.time import Time
 from rdf_utils.models.common import ModelBase
 from rdflib import Graph, URIRef
+from rdflib.namespace import NamespaceManager
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
+from scene_dsl.rdf_parser.sensors import get_update_rate
 from std_msgs.msg import Empty as EmptyMsg
 from unique_identifier_msgs.msg import UUID as UUIDMsg
 
@@ -80,8 +84,13 @@ from bdd_exec_ros2.conversions import (
     to_scenario_status_msg,
     to_uuid_msg,
 )
-from bdd_exec_ros2.observation import load_ros_action_model, load_ros_topic_model
-from bdd_exec_ros2.sim_interfaces import SimInterface
+from bdd_exec_ros2.observation import (
+    load_ros_action_model,
+    load_ros_topic_model,
+    map_simulation_pose_snapshot,
+    simulation_pose_snapshot_stamp,
+)
+from bdd_exec_ros2.sim_interfaces import PosePollingHandle, SimInterface
 
 __DEFAULT_NODE_NAME = "test_coordinator"
 
@@ -187,6 +196,7 @@ class ScenarioContext:
     scr_rep: ScenarioVariantRep
     variation_params: dict[URIRef, Any]
     scene_inst: SceneInstanceModel
+    simulation_observations: dict[URIRef, tuple[float, dict[URIRef, URIRef]]]
     # Useful for handling timeout, cancelation
     goal_handle: ClientGoalHandle | None = None
 
@@ -194,6 +204,7 @@ class ScenarioContext:
 class BddCoordNode(Node):
     timeout_sec: float
     graph: Graph
+    _ns_manager: NamespaceManager
     us_loader: UserStoryLoader
 
     _use_sim_time: bool
@@ -211,6 +222,7 @@ class BddCoordNode(Node):
     _fpolicy_subs: dict[str, Subscription]
     _topic_observation_reg: dict[tuple[str, type], dict[UUID, set[URIRef]]]
     _observation_subs: dict[tuple[str, type], Subscription]
+    _simulation_observation_handles: dict[tuple[UUID, URIRef], PosePollingHandle]
     _topic_observation_adapters: dict[
         type,
         tuple[TimestampedObservationProtocol, EntityObservationMapperProtocol | None],
@@ -318,6 +330,7 @@ class BddCoordNode(Node):
             )
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
+        self._ns_manager = self.graph.namespace_manager
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
         self._scene_setup_mode, self._sim_interface = self._resolve_scene_setup()
@@ -335,7 +348,7 @@ class BddCoordNode(Node):
                 get_tmpl_bhv_pickplace,
                 get_tmpl_fc_str_tmpl,
                 lambda model, **kwargs: get_tmpl_fc_config(
-                    model, ns_manager=self.graph.namespace_manager, **kwargs
+                    model, ns_manager=self._ns_manager, **kwargs
                 ),
             ],
             tc_str_gens=[
@@ -349,6 +362,7 @@ class BddCoordNode(Node):
         self._fpolicy_subs = {}
         self._topic_observation_reg = {}
         self._observation_subs = {}
+        self._simulation_observation_handles = {}
 
     def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
         mode_value = self.get_parameter("scene_setup_mode").value
@@ -398,6 +412,10 @@ class BddCoordNode(Node):
             del ctx_fc_dict[context_id]
         for ctx_provider_dict in self._topic_observation_reg.values():
             ctx_provider_dict.pop(context_id, None)
+        for key, handle in tuple(self._simulation_observation_handles.items()):
+            if key[0] == context_id:
+                handle.cancel()
+                del self._simulation_observation_handles[key]
 
     def _update_observation(self, topic_key: tuple[str, type], msg: Any) -> None:
         receipt_stamp = ros_time_to_stamp(self.get_clock().now())
@@ -470,9 +488,6 @@ class BddCoordNode(Node):
 
     def _create_subscription(self, model: ModelBase, context_id: UUID):
         if URI_ROS_TYPE_TOPIC not in model.types:
-            self.get_logger().warning(
-                f"create_subscription: model {model.id} does not have ROSTopic type"
-            )
             return
 
         topic_name = model.get_attr(key=URI_ROS_PRED_CHNL_NAME)
@@ -493,7 +508,7 @@ class BddCoordNode(Node):
 
             if topic_name in self._fpolicy_subs:
                 self.get_logger().info(
-                    f"not creating new subscription for '{model.id.n3(self.graph.namespace_manager)}' on topic '{topic_name}'"
+                    f"not creating new subscription for '{model.id.n3(self._ns_manager)}' on topic '{topic_name}'"
                 )
                 return
 
@@ -556,36 +571,139 @@ class BddCoordNode(Node):
         )
         obs_manager.bind_observation_targets(val_dict)
 
-        provider_uris = {
-            provider_uri
-            for policy in obs_manager.obs_policies.values()
-            for provider_uri in policy.observation_providers.values()
-        }
-        for provider_uri in provider_uris:
-            provider = ModelBase(node_id=provider_uri, graph=self.graph)
-            load_ros_topic_model(graph=self.graph, model=provider)
-            self._create_observation_subscription(
-                provider=provider, context_id=scr_context_id, obs_manager=obs_manager
-            )
+        scene_inst = obs_manager.scenario_exec.scene_instance
+
+        simulation_rates = {}
+        for provider_uri, provider in obs_manager.providers.items():
+            if URI_ROS_TYPE_TOPIC in provider.types:
+                load_ros_topic_model(graph=self.graph, model=provider)
+                self._create_observation_subscription(
+                    provider=provider,
+                    context_id=scr_context_id,
+                    obs_manager=obs_manager,
+                )
+            elif URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER in provider.types:
+                simulation_rates[provider_uri] = get_update_rate(self.graph, provider)
+                obs_manager.register_provider(
+                    provider_uri,
+                    simulation_pose_snapshot_stamp,
+                    map_simulation_pose_snapshot,
+                )
 
         scr_rep = ScenarioVariantRep(
             scr_var=scr_var,
             clause_rep_builder=self._clause_rep_builder,
             val_dict=val_dict,
-            ns_manager=self.graph.namespace_manager,
+            ns_manager=self._ns_manager,
         )
 
-        return ScenarioContext(
+        context = ScenarioContext(
             context_id=scr_context_id,
             variation_params=val_dict,
             obs_manager=obs_manager,
             scr_rep=scr_rep,
-            scene_inst=SceneInstanceModel(
-                obs_manager.scenario_exec.scene_inst_id,
-                self.graph,
-                scene_model=scr_var.scene,
-            ),
+            scene_inst=scene_inst,
+            simulation_observations={},
         )
+        for provider_uri, rate in simulation_rates.items():
+            modelled_elem_by_obs_target = {}
+            for (
+                observation_uri,
+                observation_target,
+            ) in obs_manager.observation_targets_for_provider(provider_uri).items():
+                if observation_target is None:
+                    raise ValueError(
+                        f"simulation observation '{observation_uri}' has no modelled target"
+                    )
+                modelled_element = scene_inst.resolve_modelled_element_id(
+                    observation_target
+                )
+                if modelled_element is None:
+                    raise ValueError(
+                        f"simulation observation '{observation_uri}' has no modelled target"
+                    )
+                modelled_elem_by_obs_target[observation_target] = modelled_element
+            context.simulation_observations[provider_uri] = (
+                rate,
+                modelled_elem_by_obs_target,
+            )
+        return context
+
+    def _update_simulation_observation(
+        self,
+        context_id: UUID,
+        provider_uri: URIRef,
+        poses: dict[URIRef, PoseStamped],
+    ) -> None:
+        with self._scr_lock:
+            context = self._scenario_contexts.get(context_id)
+            if context is None:
+                return
+            _, modelled_elem_by_obs_target = context.simulation_observations[
+                provider_uri
+            ]
+        missing_targets = set(modelled_elem_by_obs_target.values()) - poses.keys()
+        if missing_targets:
+            self.get_logger().warning(
+                f"simulation observation provider "
+                f"'{provider_uri.n3(self._ns_manager)}' returned no state "
+                f"for: {sorted(target.n3(self._ns_manager) for target in missing_targets)}",
+                throttle_duration_sec=1.0,
+            )
+        provider_poses = {
+            observed_target: poses[model_target]
+            for observed_target, model_target in modelled_elem_by_obs_target.items()
+            if model_target in poses
+        }
+        if not provider_poses:
+            return
+        receipt_stamp = ros_time_to_stamp(self.get_clock().now())
+        with self._scr_lock:
+            if self._scenario_contexts.get(context_id) is not context:
+                return
+            results = context.obs_manager.update_provider_observation(
+                provider_uri, provider_poses, receipt_stamp
+            )
+        for policy_uri, (updated, reason) in results.items():
+            if not updated:
+                self.get_logger().warning(
+                    f"simulation observation policy "
+                    f"'{policy_uri.n3(self._ns_manager)}' rejected "
+                    f"provider '{provider_uri.n3(self._ns_manager)}': {reason}",
+                    throttle_duration_sec=1.0,
+                )
+
+    def _simulation_observation_error(
+        self, provider_uri: URIRef, exc: Exception
+    ) -> None:
+        self.get_logger().warning(
+            f"simulation observation provider "
+            f"'{provider_uri.n3(self._ns_manager)}' failed: {exc}"
+        )
+
+    def _activate_simulation_observations(self, context: ScenarioContext) -> None:
+        if not context.simulation_observations:
+            return
+        if self._sim_interface is None:
+            raise RuntimeError("simulation observations require simulation scene setup")
+        for provider_uri, (
+            rate,
+            modelled_elem_by_obs_target,
+        ) in context.simulation_observations.items():
+            key = (context.context_id, provider_uri)
+            self._simulation_observation_handles[key] = (
+                self._sim_interface.start_pose_polling(
+                    context.scene_inst,
+                    set(modelled_elem_by_obs_target.values()),
+                    rate,
+                    lambda poses, cid=context.context_id, pid=provider_uri: (
+                        self._update_simulation_observation(cid, pid, poses)
+                    ),
+                    lambda exc, pid=provider_uri: self._simulation_observation_error(
+                        pid, exc
+                    ),
+                )
+            )
 
     def _start_scenario_variant(
         self, context: ScenarioContext, scr_var: ScenarioVariantModel
@@ -599,6 +717,7 @@ class BddCoordNode(Node):
         goal_msg.configs = get_cfg_messages(scr_var=scr_var, var_value_dict=val_dict)
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
+        self._activate_simulation_observations(context)
 
         # Publish scenario start event
         self._send_event(
@@ -679,6 +798,7 @@ class BddCoordNode(Node):
                 return
 
             now = self.get_clock().now()
+            now_stamp = ros_time_to_stamp(now)
             status_msg = ScenarioStatusList()
             status_msg.stamp = now.to_msg()
             status_msg.scenarios = []
@@ -695,7 +815,15 @@ class BddCoordNode(Node):
                 status_msg.scenarios.append(scr_status)
 
                 # if finished remove from active scenarios
-                if scr_ctx.obs_manager.scr_end_time is not None:
+                observation_end_times = [
+                    policy.end_time
+                    for policy in scr_ctx.obs_manager.obs_policies.values()
+                    if policy.end_time is not None
+                ]
+                if scr_ctx.obs_manager.scr_end_time is not None and now_stamp >= max(
+                    observation_end_times,
+                    default=scr_ctx.obs_manager.scr_end_time,
+                ):
                     finished_ids.add(ctx_id)
 
             for ctx_id in finished_ids:
@@ -743,7 +871,7 @@ class BddCoordNode(Node):
         forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
         evt_ctx_uuid = from_uuid_msg(msg.scenario_context_id)
         with self._scr_lock:
-            evt_rep = f"{self.graph.namespace_manager.curie(msg.uri)} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
+            evt_rep = f"{self._ns_manager.curie(msg.uri)} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
             self.get_logger().info(f"received event [{evt_rep}]")
 
             if forward_to_all:

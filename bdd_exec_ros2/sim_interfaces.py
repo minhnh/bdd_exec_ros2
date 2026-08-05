@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import re
+import threading
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 from ament_index_python import get_package_share_directory
@@ -38,7 +43,7 @@ from simulation_interfaces.msg import (
     SpawnEntity as SpawnEntityMsg,
 )
 from simulation_interfaces.srv import (
-    GetEntityState,
+    GetEntitiesStates,
     GetSimulationState,
     GetSimulatorFeatures,
     LoadWorld,
@@ -81,10 +86,73 @@ def _require_supported_resource_types(features: SimulatorFeatures) -> set[URIRef
     return resource_types
 
 
+class PosePollingHandle:
+    def __init__(
+        self,
+        interface: SimInterface,
+        scene_inst: SceneInstanceModel,
+        element_ids: Collection[URIRef],
+        frequency: float,
+        callback: Callable[[dict[URIRef, PoseStamped]], None],
+        error_callback: Callable[[Exception], None] | None,
+    ) -> None:
+        if frequency <= 0:
+            raise ValueError("pose polling frequency must be positive")
+        executor = interface._node.executor
+        if executor is None:
+            raise RuntimeError("simulation node is not attached to an executor")
+        self._interface = interface
+        self._scene_inst = scene_inst
+        self._element_ids = frozenset(element_ids)
+        self._callback = callback
+        self._error_callback = error_callback
+        self._executor = executor
+        self._lock = threading.Lock()
+        self._pending = False
+        self._cancelled = False
+        self._timer = interface._node.create_timer(1.0 / frequency, self._schedule)
+        self._schedule()
+
+    def _schedule(self) -> None:
+        with self._lock:
+            if self._cancelled or self._pending:
+                return
+            self._pending = True
+        self._executor.create_task(self._poll())
+
+    async def _poll(self) -> None:
+        try:
+            poses = await self._interface.get_elements_poses(
+                self._scene_inst, self._element_ids
+            )
+            with self._lock:
+                cancelled = self._cancelled
+            if not cancelled:
+                self._callback(poses)
+        except Exception as exc:  # noqa: BLE001 - polling continues after failures
+            with self._lock:
+                cancelled = self._cancelled
+            if not cancelled:
+                if self._error_callback is None:
+                    self._interface._logger.warning(f"pose polling failed: {exc}")
+                else:
+                    self._error_callback(exc)
+        finally:
+            with self._lock:
+                self._pending = False
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+        self._interface._node.destroy_timer(self._timer)
+
+
 class SimInterface:
     _load_world_srv_client: Client
     _get_sim_state_srv_client: Client
-    _get_entity_state_srv_client: Client
+    _get_entities_states_srv_client: Client
     _set_sim_state_srv_client: Client
     _reset_simulation_srv_client: Client
     _sim_feature_srv_client: Client
@@ -104,7 +172,7 @@ class SimInterface:
         spawn_entities_srv_name: str = "spawn_entities",
         model_graph: Graph | None = None,
         world_entity_name: str = "world",
-        get_entity_state_srv_name: str = "get_entity_state",
+        get_entities_states_srv_name: str = "get_entities_states",
     ) -> None:
         self.ns: str = ns
         self.timeout: float = timeout
@@ -141,9 +209,9 @@ class SimInterface:
             srv_name=get_sim_state_srv_full,
         )
 
-        self._get_entity_state_srv_client = node.create_client(
-            srv_type=GetEntityState,
-            srv_name=_service_name(self.ns, get_entity_state_srv_name),
+        self._get_entities_states_srv_client = node.create_client(
+            srv_type=GetEntitiesStates,
+            srv_name=_service_name(self.ns, get_entities_states_srv_name),
         )
 
         set_sim_state_srv_full = _service_name(self.ns, set_sim_state_srv_name)
@@ -218,13 +286,13 @@ class SimInterface:
             )
         return response.state
 
-    async def get_element_pose(
+    async def get_elements_poses(
         self,
         scene_inst: SceneInstanceModel,
-        element_id: URIRef,
-    ) -> PoseStamped | None:
+        element_ids: Collection[URIRef],
+    ) -> dict[URIRef, PoseStamped]:
         if self._model_graph is None:
-            raise RuntimeError("getting an element pose requires a model graph")
+            raise RuntimeError("getting element poses requires a model graph")
         features = await self.get_sim_features(quiet=False)
         if (
             features is None
@@ -232,28 +300,36 @@ class SimInterface:
         ):
             raise RuntimeError("simulator does not support getting entity state")
 
-        resolved = scene_inst.resolve_element_root_frame(
-            element_id,
-            _require_supported_resource_types(features),
-            self._model_graph,
-        )
-        if resolved is None:
-            return None
+        element_ids_by_entity: dict[str, list[URIRef]] = {}
+        resource_types = _require_supported_resource_types(features)
+        for element_id in element_ids:
+            resolved = scene_inst.resolve_element_root_frame(
+                element_id, resource_types, self._model_graph
+            )
+            if resolved is None:
+                continue
+            _, mapping, _ = resolved
+            entity = mapping.entity or get_valid_var_name(
+                element_id.n3(self._model_graph.namespace_manager)
+            )
+            element_ids_by_entity.setdefault(entity, []).append(element_id)
+        if not element_ids_by_entity:
+            return {}
 
-        _, mapping, _ = resolved
-        entity = mapping.entity or get_valid_var_name(
-            element_id.n3(self._model_graph.namespace_manager)
-        )
-        if not self._get_entity_state_srv_client.wait_for_service(
+        if not self._get_entities_states_srv_client.wait_for_service(
             timeout_sec=self.timeout
         ):
             raise TimeoutError(
-                f"Timed out waiting for get_entity_state after {self.timeout}s"
+                f"Timed out waiting for get_entities_states after {self.timeout}s"
             )
 
-        future = self._get_entity_state_srv_client.call_async(
-            GetEntityState.Request(entity=entity)
+        request = GetEntitiesStates.Request()
+        request.filters.filter = (
+            "^("
+            + "|".join(re.escape(entity) for entity in sorted(element_ids_by_entity))
+            + ")$"
         )
+        future = self._get_entities_states_srv_client.call_async(request)
         timer = self._node.create_timer(self.timeout, future.cancel)
         try:
             response = await future
@@ -261,15 +337,46 @@ class SimInterface:
             self._node.destroy_timer(timer)
 
         if response is None:
-            raise TimeoutError(f"get_entity_state timed out after {self.timeout}s")
+            raise TimeoutError(f"get_entities_states timed out after {self.timeout}s")
         if response.result.result == Result.RESULT_NOT_FOUND:
-            return None
+            return {}
         if response.result.result != Result.RESULT_OK:
             raise RuntimeError(
-                f"get_entity_state failed ({response.result.result}): "
+                f"get_entities_states failed ({response.result.result}): "
                 f"{response.result.error_message}"
             )
-        return PoseStamped(header=response.state.header, pose=response.state.pose)
+        if len(response.entities) != len(response.states):
+            raise RuntimeError(
+                "get_entities_states returned different entity and state counts"
+            )
+
+        poses = {}
+        for entity, state in zip(response.entities, response.states, strict=True):
+            for element_id in element_ids_by_entity.get(entity, ()):
+                poses[element_id] = PoseStamped(header=state.header, pose=state.pose)
+        return poses
+
+    async def get_element_pose(
+        self, scene_inst: SceneInstanceModel, element_id: URIRef
+    ) -> PoseStamped | None:
+        return (await self.get_elements_poses(scene_inst, [element_id])).get(element_id)
+
+    def start_pose_polling(
+        self,
+        scene_inst: SceneInstanceModel,
+        element_ids: Collection[URIRef],
+        frequency: float,
+        callback: Callable[[dict[URIRef, PoseStamped]], None],
+        error_callback: Callable[[Exception], None] | None = None,
+    ) -> PosePollingHandle:
+        return PosePollingHandle(
+            self,
+            scene_inst,
+            element_ids,
+            frequency,
+            callback,
+            error_callback,
+        )
 
     async def set_sim_state(self, state: SimulationState) -> None:
         features = await self.get_sim_features(quiet=False)
@@ -410,6 +517,7 @@ class SimInterface:
             return {}
 
         responses = []
+        num_entries = len(entries)
         if (
             SimulatorFeatures.SPAWNING_ENTITIES in features.features
             and self._spawn_entities_srv_client.wait_for_service(
@@ -419,16 +527,19 @@ class SimInterface:
             request = SpawnEntities.Request()
             request.spawn_requests = [msg for _, msg in entries]
             future = self._spawn_entities_srv_client.call_async(request)
-            timer = self._node.create_timer(self.timeout, future.cancel)
+            # Scale spawn_entities timeout with number of entities
+            # Not necessary for sending single requests
+            spawn_timeout = num_entries * self.timeout
+            timer = self._node.create_timer(spawn_timeout, future.cancel)
             try:
                 response = await future
             finally:
                 self._node.destroy_timer(timer)
             if response is None:
                 raise TimeoutError(f"spawn_entities timed out after {self.timeout}s")
-            if len(response.results) != len(entries):
+            if len(response.results) != num_entries:
                 raise RuntimeError(
-                    f"spawn_entities returned {len(response.results)} results for {len(entries)} requests"
+                    f"spawn_entities returned {len(response.results)} results for {num_entries} requests"
                 )
             responses = response.results
             aggregate_ok = response.result.result == Result.RESULT_OK

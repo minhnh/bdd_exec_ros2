@@ -56,31 +56,36 @@ scene inst (ns=scene_lab_isaac) pickplace_scene_mjc {
 
     obj <workspace_objects.box1> {
         model box1-usd as usd {
-            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/Props/KLT_Bin/small_KLT.usd'
+            // sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
             map body <pickplace_graph.box1> to "/spawned/box1"
         }
     }
     obj <workspace_objects.box2> {
         model box2-usd as usd {
-            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/Props/KLT_Bin/small_KLT.usd'
+            // sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd'
             map body <pickplace_graph.box2> to "/spawned/box2"
         }
     }
     obj <pickplace_objects.tomato_soup_can> {
         model tomato-soup-can-usd as usd {
-            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd'
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd'
+            // sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd'
             map body <pickplace_graph.tomato_soup_can> to "/spawned/soup_can"
         }
     }
     obj <pickplace_objects.mustard_bottle> {
         model mustard-bottle-usd as usd {
-            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned_Physics/006_mustard_bottle.usd'
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/Props/YCB/Axis_Aligned_Physics/006_mustard_bottle.usd'
+            // sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned_Physics/006_mustard_bottle.usd'
             map body <pickplace_graph.mustard_bottle> to "/spawned/mustard"
         }
     }
     obj <pickplace_objects.dex_cube> {
         model dex-cube-usd as usd {
-            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd'
+            sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd'
+            // sys path = 'https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd'
             map body <pickplace_graph.dex_cube> to "/spawned/cube"
         }
     }

@@ -1,0 +1,41 @@
+import "pickplace.bdd"
+import "lab.scenex"
+
+ns bdd_exec='https://secorolab.github.io/models/acceptance-criteria/bdd/executions/'
+ns bdd_exec_ros='https://secorolab.github.io/models/acceptance-criteria/bdd/executions/ros/'
+
+bhv impl (ns=bdd_exec_ros) mockup-pp-server {
+    bhv action: "/bdd/mockup_bhv_server"
+}
+
+obs policy (ns=bdd_exec_ros) fcx-located-before-topic
+    for <tmpl_pickplace.fc-located-before>
+{
+    trinary topic: "/obs_policy/located_at_pick_ws"
+}
+obs provider (ns=bdd_exec_ros) entity-state {
+    ros simulation entity state
+    update-rate: 5 Hz
+}
+obs policy (ns=bdd_exec_ros) fcx-located-after-simulation
+    for <tmpl_pickplace.fc-located-after>
+{
+    observation object-pose {
+        provider: <entity-state>
+        observes: <tmpl_pickplace.target_object>
+    }
+    observation workspace-pose {
+        provider: <entity-state>
+        observes: <tmpl_pickplace.place_ws>
+    }
+    py { module: bdd_exec_ros2.observation, attr: poses_are_collocated }
+}
+Scenario Exec (ns=bdd_exec) pickplace-mockup-simulation {
+    variant: <sim_pickplace.pickplace_table>
+    scene inst: <pickplace_scene_mjc>
+    bhv: <mockup-pp-server>
+    policies: {
+        <fcx-located-before-topic>,
+        <fcx-located-after-simulation>
+    }
+}
