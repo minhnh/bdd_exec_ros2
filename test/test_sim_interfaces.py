@@ -464,6 +464,56 @@ def test_pose_polling_delivers_snapshots_without_overlapping_requests():
     asyncio.run(exercise())
 
 
+def test_pose_polling_discards_late_snapshot_and_error_after_cancel():
+    async def exercise():
+        interface = SimInterface.__new__(SimInterface)
+        interface._node = _PollingNode()
+        interface._logger = SimpleNamespace(warning=lambda message: None)
+        scene = object()
+        element_ids = {URIRef("urn:test:element")}
+        request_started = asyncio.Event()
+        release_request = asyncio.Event()
+        outcomes = ["snapshot", RuntimeError("late failure")]
+        received = []
+        errors = []
+
+        async def get_elements_poses(request_scene, request_ids):
+            del request_scene, request_ids
+            request_started.set()
+            await release_request.wait()
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return {next(iter(element_ids)): Pose()}
+
+        interface.get_elements_poses = get_elements_poses
+        handle = interface.start_pose_polling(
+            scene, element_ids, 1.0, received.append, errors.append
+        )
+        await request_started.wait()
+        handle.cancel()
+        release_request.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert received == []
+        assert errors == []
+
+        request_started.clear()
+        release_request.clear()
+        handle = interface.start_pose_polling(
+            scene, element_ids, 1.0, received.append, errors.append
+        )
+        await request_started.wait()
+        handle.cancel()
+        release_request.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert received == []
+        assert errors == []
+
+    asyncio.run(exercise())
+
+
 def test_reset_simulation_uses_default_scope_and_stops_playing_simulation():
     result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
     interface = SimInterface.__new__(SimInterface)
