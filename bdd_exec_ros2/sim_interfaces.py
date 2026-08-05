@@ -87,6 +87,8 @@ def _require_supported_resource_types(features: SimulatorFeatures) -> set[URIRef
 
 
 class PosePollingHandle:
+    """Own an immediate, periodic batch-pose poll and allow cancellation."""
+
     def __init__(
         self,
         interface: SimInterface,
@@ -142,6 +144,7 @@ class PosePollingHandle:
                 self._pending = False
 
     def cancel(self) -> None:
+        """Stop future polls and discard results from an in-flight request."""
         with self._lock:
             if self._cancelled:
                 return
@@ -150,6 +153,13 @@ class PosePollingHandle:
 
 
 class SimInterface:
+    """Async client for simulator scene setup, state, and entity poses.
+
+    Use :meth:`get_elements_poses` for one filtered batch request.
+    :meth:`get_element_pose` is its one-element compatibility wrapper, while
+    :meth:`start_pose_polling` owns periodic polling and cancellation.
+    """
+
     _load_world_srv_client: Client
     _get_sim_state_srv_client: Client
     _get_entities_states_srv_client: Client
@@ -236,6 +246,7 @@ class SimInterface:
         )
 
     async def get_sim_features(self, quiet=True) -> SimulatorFeatures | None:
+        """Return cached simulator capabilities, or ``None`` on a quiet timeout."""
         if self._sim_features is not None:
             return self._sim_features
 
@@ -257,6 +268,7 @@ class SimInterface:
         return self._sim_features
 
     async def get_sim_state(self) -> SimulationState:
+        """Return the current simulation state when the simulator supports it."""
         features = await self.get_sim_features(quiet=False)
         if (
             features is None
@@ -291,6 +303,11 @@ class SimInterface:
         scene_inst: SceneInstanceModel,
         element_ids: Collection[URIRef],
     ) -> dict[URIRef, PoseStamped]:
+        """Return stamped poses for resolvable requested elements in one service call.
+
+        Missing or unresolvable elements are omitted. The simulator must advertise
+        entity-state support and a configured model graph is required.
+        """
         if self._model_graph is None:
             raise RuntimeError("getting element poses requires a model graph")
         features = await self.get_sim_features(quiet=False)
@@ -359,6 +376,7 @@ class SimInterface:
     async def get_element_pose(
         self, scene_inst: SceneInstanceModel, element_id: URIRef
     ) -> PoseStamped | None:
+        """Return one element pose, or ``None`` when it has no reported state."""
         return (await self.get_elements_poses(scene_inst, [element_id])).get(element_id)
 
     def start_pose_polling(
@@ -369,6 +387,11 @@ class SimInterface:
         callback: Callable[[dict[URIRef, PoseStamped]], None],
         error_callback: Callable[[Exception], None] | None = None,
     ) -> PosePollingHandle:
+        """Start immediate periodic batch-pose polling at a positive frequency.
+
+        The returned handle cancels its timer and discards callbacks from in-flight
+        requests after cancellation.
+        """
         return PosePollingHandle(
             self,
             scene_inst,
@@ -379,6 +402,7 @@ class SimInterface:
         )
 
     async def set_sim_state(self, state: SimulationState) -> None:
+        """Set the simulator state, accepting an already-reached target state."""
         features = await self.get_sim_features(quiet=False)
         if (
             features is None
@@ -413,6 +437,7 @@ class SimInterface:
             )
 
     async def load_world(self, scene_inst: SceneInstanceModel) -> Path | None:
+        """Load the single supported world resource for ``scene_inst``, if any."""
         features = await self.get_sim_features(quiet=False)
         if features is None or SimulatorFeatures.WORLD_LOADING not in features.features:
             raise RuntimeError("simulator does not support world loading")
@@ -472,6 +497,7 @@ class SimInterface:
         return path
 
     async def reset_simulation(self) -> None:
+        """Reset simulation state and leave the simulator stopped."""
         features = await self.get_sim_features(quiet=False)
         if (
             features is None
@@ -597,6 +623,7 @@ class SimInterface:
         *,
         additional_elements: set[URIRef] | None = None,
     ) -> dict[URIRef, str]:
+        """Spawn modelled scene elements and return their simulator entity names."""
         if self._model_graph is None:
             raise RuntimeError("spawning requires a model graph")
         features = await self.get_sim_features(quiet=False)
@@ -617,6 +644,7 @@ class SimInterface:
         *,
         additional_elements: set[URIRef] | None = None,
     ) -> dict[URIRef, str]:
+        """Load or reset a scene, spawn selected elements, then start simulation."""
         if self._model_graph is None:
             raise RuntimeError("scene setup requires a model graph")
         features = await self.get_sim_features(quiet=False)
