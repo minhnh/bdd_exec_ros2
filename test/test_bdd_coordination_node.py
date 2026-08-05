@@ -24,10 +24,12 @@ from bdd_dsl.models.urirefs import (
     URI_ROS_TYPE_TOPIC,
 )
 from bdd_ros2_interfaces.msg import ScenarioStatus
-from rdflib import URIRef
+from geometry_msgs.msg import PoseStamped
+from rclpy.time import Time
+from rdflib import Graph, URIRef
 from vision_msgs.msg import Detection3D
 
-from bdd_exec_ros2.conversions import TRINARY_NAMES
+from bdd_exec_ros2.conversions import TRINARY_NAMES, ros_time_to_stamp
 from bdd_exec_ros2.executables.bdd_coordination_node import (
     BddCoordNode,
     SceneSetupMode,
@@ -165,12 +167,12 @@ def test_scene_setup_failure_cleans_up_and_continues():
 
 def test_completed_context_advances_the_setup_queue():
     context_id = uuid4()
+    now = Time(seconds=2.0)
     context = SimpleNamespace(
         context_id=context_id,
-        obs_manager=SimpleNamespace(scr_end_time=1.0),
+        obs_manager=SimpleNamespace(scr_end_time=1.0, obs_policies={}),
         scr_rep=object(),
     )
-    now = SimpleNamespace(to_msg=Mock(return_value=object()))
     node = _node(
         _scenario_contexts={context_id: context},
         _scr_lock=threading.Lock(),
@@ -190,6 +192,47 @@ def test_completed_context_advances_the_setup_queue():
     assert node._scenario_contexts == {}
     node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
     node._schedule_next_scenario.assert_called_once_with()
+
+
+def test_completed_context_is_retained_during_observation_horizon():
+    context_id = uuid4()
+    now = Time(seconds=2.0)
+    context = SimpleNamespace(
+        context_id=context_id,
+        obs_manager=SimpleNamespace(
+            scr_end_time=1.0,
+            obs_policies={URIRef("urn:test:policy"): SimpleNamespace(end_time=3.0)},
+        ),
+        scr_rep=object(),
+    )
+    node = _node(
+        _scenario_contexts={context_id: context},
+        _scr_lock=threading.Lock(),
+        _remove_context_topic_reg=Mock(),
+        _scr_status_pub=Mock(),
+        _schedule_next_scenario=Mock(),
+        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=now))),
+        get_logger=Mock(return_value=Mock()),
+    )
+
+    with patch(
+        "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg",
+        return_value=ScenarioStatus(),
+    ):
+        node._status_timer_callback()
+
+    assert node._scenario_contexts == {context_id: context}
+    node._remove_context_topic_reg.assert_not_called()
+
+    node.get_clock.return_value.now.return_value = Time(seconds=4.0)
+    with patch(
+        "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg",
+        return_value=ScenarioStatus(),
+    ):
+        node._status_timer_callback()
+
+    assert node._scenario_contexts == {}
+    node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
 
 
 def test_behaviour_result_is_recorded_before_scenario_ends():
@@ -295,3 +338,124 @@ def test_topic_observation_adapter_module_attribute_loads_mockup_adapter():
     timestamp_extractor, entity_mapper = adapters[Detection3D]
     assert callable(timestamp_extractor)
     assert callable(entity_mapper)
+
+
+def test_simulation_provider_forwards_pose_snapshot_atomically():
+    context_id = uuid4()
+    provider_uri = URIRef("urn:test:provider")
+    routes = {
+        URIRef("urn:test:first-observation"): URIRef("urn:test:first-target"),
+        URIRef("urn:test:second-observation"): URIRef("urn:test:second-target"),
+    }
+    poses = {target: PoseStamped() for target in routes.values()}
+    manager = SimpleNamespace(update_provider_observation=Mock(return_value={}))
+    context = SimpleNamespace(
+        scene_inst=object(),
+        obs_manager=manager,
+        simulation_observations={provider_uri: (object(), routes)},
+    )
+    receipt_time = Time(seconds=42.0)
+    node = _node(
+        _scr_lock=threading.Lock(),
+        _scenario_contexts={context_id: context},
+        get_clock=Mock(
+            return_value=SimpleNamespace(now=Mock(return_value=receipt_time))
+        ),
+        get_logger=Mock(return_value=Mock()),
+    )
+
+    node._update_simulation_observation(context_id, provider_uri, poses)
+
+    manager.update_provider_observation.assert_called_once_with(
+        provider_uri,
+        {
+            observed_target: poses[model_target]
+            for observed_target, model_target in routes.items()
+        },
+        ros_time_to_stamp(receipt_time),
+    )
+
+
+def test_context_cleanup_destroys_simulation_provider_timer():
+    context_id = uuid4()
+    key = (context_id, URIRef("urn:test:provider"))
+    handle = Mock()
+    node = _node(
+        _topic_fpolicy_reg={},
+        _topic_observation_reg={},
+        _simulation_observation_handles={key: handle},
+    )
+
+    node._remove_context_topic_reg(context_id)
+
+    handle.cancel.assert_called_once_with()
+    assert not node._simulation_observation_handles
+
+
+def test_simulation_provider_reports_missing_target_states():
+    context_id = uuid4()
+    provider_uri = URIRef("urn:test:provider")
+    target_uri = URIRef("urn:test:missing-target")
+    logger = Mock()
+    graph = Graph()
+    graph.bind("test", "urn:test:")
+    context = SimpleNamespace(
+        scene_inst=object(),
+        obs_manager=SimpleNamespace(update_provider_observation=Mock()),
+        simulation_observations={
+            provider_uri: (object(), {URIRef("urn:test:observation"): target_uri})
+        },
+    )
+    node = _node(
+        _scr_lock=threading.Lock(),
+        _scenario_contexts={context_id: context},
+        graph=graph,
+        _ns_manager=graph.namespace_manager,
+        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=Time()))),
+        get_logger=Mock(return_value=logger),
+    )
+
+    node._update_simulation_observation(context_id, provider_uri, {})
+
+    logger.warning.assert_called_once()
+    assert target_uri.n3(graph.namespace_manager) in logger.warning.call_args.args[0]
+    context.obs_manager.update_provider_observation.assert_not_called()
+
+
+def test_simulation_provider_reports_policy_rejection():
+    context_id = uuid4()
+    provider_uri = URIRef("urn:test:provider")
+    observation_uri = URIRef("urn:test:observation")
+    target_uri = URIRef("urn:test:target")
+    policy_uri = URIRef("urn:test:policy")
+    logger = Mock()
+    graph = Graph()
+    graph.bind("test", "urn:test:")
+    manager = SimpleNamespace(
+        update_provider_observation=Mock(
+            return_value={policy_uri: (False, "not active")}
+        )
+    )
+    context = SimpleNamespace(
+        scene_inst=object(),
+        obs_manager=manager,
+        simulation_observations={
+            provider_uri: (object(), {observation_uri: target_uri})
+        },
+    )
+    node = _node(
+        _scr_lock=threading.Lock(),
+        _scenario_contexts={context_id: context},
+        graph=graph,
+        _ns_manager=graph.namespace_manager,
+        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=Time()))),
+        get_logger=Mock(return_value=logger),
+    )
+
+    node._update_simulation_observation(
+        context_id, provider_uri, {target_uri: PoseStamped()}
+    )
+
+    logger.warning.assert_called_once()
+    assert policy_uri.n3(graph.namespace_manager) in logger.warning.call_args.args[0]
+    assert "not active" in logger.warning.call_args.args[0]

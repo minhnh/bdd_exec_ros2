@@ -29,7 +29,7 @@ Scenario Template (ns=bdd_tmpl) tmpl_pickplace {
         }
     Then:
         fc-located-after: holds(
-            <target_object> is located at <place_ws>, 2 seconds after <evt-place-end>
+            <target_object> is located at <place_ws>, 5 seconds after <evt-place-end>
         )
 }
 

@@ -1,0 +1,8 @@
+- path: "models/robbdd/pickplace.bdd"
+  format: "robbdd"
+  path_type: "ros"
+  package_name: "bdd_exec_ros2"
+- path: "models/robbdd/pickplace-sim-observations.bddx"
+  format: "robbdd"
+  path_type: "ros"
+  package_name: "bdd_exec_ros2"

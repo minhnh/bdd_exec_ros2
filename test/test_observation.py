@@ -8,9 +8,12 @@ from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_WS,
     URI_BHV_TYPE_PLACE,
 )
+from geometry_msgs.msg import PoseStamped
+from rclpy.time import Time
 from rdflib import URIRef
 from vision_msgs.msg import Detection3D
 
+from bdd_exec_ros2.conversions import ros_time_to_stamp
 from bdd_exec_ros2.executables.mockup_behaviour_node import (
     MOCKUP_DETECTION3D_ENTITY_URIS,
     MockupBhvNode,
@@ -19,7 +22,9 @@ from bdd_exec_ros2.executables.mockup_behaviour_node import (
 from bdd_exec_ros2.observation import (
     detection3d_stamp,
     map_detection3d_entity_by_dict,
+    map_simulation_pose_snapshot,
     poses_are_collocated,
+    simulation_pose_snapshot_stamp,
 )
 
 
@@ -39,6 +44,26 @@ def test_detection3d_adapter_extracts_stamp_and_mapped_pose():
     assert (
         map_detection3d_entity_by_dict(detection, MOCKUP_DETECTION3D_ENTITY_URIS) == []
     )
+
+
+def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():
+    first = URIRef("urn:test:first")
+    second = URIRef("urn:test:second")
+    poses = {first: PoseStamped(), second: PoseStamped()}
+    source_time = Time(seconds=7.0)
+    poses[first].header.stamp = source_time.to_msg()
+    receipt_stamp = 42.0
+
+    mapped = map_simulation_pose_snapshot(poses)
+
+    assert simulation_pose_snapshot_stamp(poses, receipt_stamp) == ros_time_to_stamp(
+        source_time
+    )
+    assert {observation.entity_uri: observation.value for observation in mapped} == {
+        entity_uri: pose.pose for entity_uri, pose in poses.items()
+    }
+    poses[first].header.stamp = Time().to_msg()
+    assert simulation_pose_snapshot_stamp(poses, receipt_stamp) == receipt_stamp
 
 
 def test_pose_evaluator_requires_collocated_observations():
