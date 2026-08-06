@@ -129,9 +129,7 @@ Without collision messages, the policy defaults to a successful `no collision re
 Custom RobBDD observation policies now reference evaluator classes, for example
 `bdd_exec_ros2.observation.TargetsDoNotCollideEvaluator`, which own their result and reason.
 
-<video src="./docs/visualizer-obs_with_collisions.webm" controls>
-  Visualizer demo with collision observations
-</video>
+![Visualizer screenshot](./docs/visualizer-sceenshot.png)
 
 ### Mockup Behaviour Server
 
