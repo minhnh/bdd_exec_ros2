@@ -15,7 +15,11 @@
 from collections.abc import Mapping
 from math import sqrt
 
-from bdd_dsl.models.observation import EntityObservation, ObservationStamped
+from bdd_dsl.models.observation import (
+    EntityObservation,
+    ObservationPolicyEvaluator,
+    ObservationStamped,
+)
 from bdd_dsl.models.urirefs import (
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_PRED_TYPE_NAME,
@@ -103,23 +107,24 @@ def map_simulation_pose_snapshot(
     ]
 
 
-def poses_are_collocated(
-    observations: list[ObservationStamped],
-) -> tuple[bool, str]:
-    if len(observations) != 2:
-        raise ValueError(f"expected two pose observations, got {len(observations)}")
-    left, right = (sample.value.position for sample in observations)
-    distance_squared = (
-        (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2
-    )
-    distance = sqrt(distance_squared)
-    threshold = 0.01
-    result = distance <= threshold
-    comparison = "within" if result else "exceeds"
-    return result, (
-        f"pose distance {distance:.4f} m {comparison} "
-        f"collocation threshold {threshold:.4f} m"
-    )
+class PosesAreCollocatedEvaluator(ObservationPolicyEvaluator):
+    def _evaluate_samples(
+        self, observations: list[ObservationStamped]
+    ) -> tuple[bool, str]:
+        if len(observations) != 2:
+            raise ValueError(f"expected two pose observations, got {len(observations)}")
+        left, right = (sample.value.position for sample in observations)
+        distance_squared = (
+            (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2
+        )
+        distance = sqrt(distance_squared)
+        threshold = 0.01
+        result = distance <= threshold
+        comparison = "within" if result else "exceeds"
+        return result, (
+            f"pose distance {distance:.4f} m {comparison} "
+            f"collocation threshold {threshold:.4f} m"
+        )
 
 
 def collision_stamp(observation: Collision, receipt_stamp: float) -> float:
@@ -157,17 +162,21 @@ def collision_target_mapper(
     return mapped
 
 
-def targets_do_not_collide(
-    observations: list[ObservationStamped],
-) -> tuple[bool, str]:
-    if not observations:
-        raise ValueError("expected at least one collision observation")
-    collision_sets = [sample.value for sample in observations]
-    if not all(isinstance(value, (set, frozenset)) for value in collision_sets):
-        raise TypeError("collision evaluator expects sets of colliding bodies")
-    affected_bodies = set().union(*collision_sets)
-    if all(collision_sets):
-        return False, f"collision affects {sorted(affected_bodies)}"
-    if not affected_bodies:
-        return True, "no active collision for any target"
-    return True, "collision does not affect all targets"
+class TargetsDoNotCollideEvaluator(ObservationPolicyEvaluator):
+    def __init__(self) -> None:
+        super().__init__((True, "no collision recorded"))
+
+    def _evaluate_samples(
+        self, observations: list[ObservationStamped]
+    ) -> tuple[bool, str]:
+        if not observations:
+            raise ValueError("expected at least one collision observation")
+        collision_sets = [sample.value for sample in observations]
+        if not all(isinstance(value, (set, frozenset)) for value in collision_sets):
+            raise TypeError("collision evaluator expects sets of colliding bodies")
+        affected_bodies = set().union(*collision_sets)
+        if all(collision_sets):
+            return False, f"collision affects {sorted(affected_bodies)}"
+        if not affected_bodies:
+            return True, "no active collision for any target"
+        return True, "collision does not affect all targets"

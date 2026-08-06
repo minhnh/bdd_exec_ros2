@@ -355,15 +355,17 @@ def to_scenario_status_msg(
     scr_status.fluents = []
     fluent_results = []
     for obs_pol in obs_manager.obs_policies.values():
-        fl_value, fl_reason = trinaries_policy(obs_pol.trinary_timeline)
+        fl_res = obs_pol.get_result(
+            stamp=now_stamp,
+            trinaries_policy=trinaries_policy,
+        )
         # Always set config result to true for now
         if URI_BDD_TYPE_CONFIG in obs_pol.fluent_types:
-            fl_value, fl_reason = True, "configuration successful"
-        fl_res = TrinaryStamped(
-            stamp=now_stamp,
-            trinary=fl_value,
-            reason=fl_reason,
-        )
+            fl_res = TrinaryStamped(
+                stamp=now_stamp,
+                trinary=True,
+                reason="configuration successful",
+            )
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()
