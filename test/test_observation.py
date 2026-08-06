@@ -22,6 +22,7 @@ from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_WS,
     URI_BHV_TYPE_PLACE,
 )
+from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 from rdflib import URIRef
@@ -89,9 +90,71 @@ def test_pose_evaluator_requires_collocated_observations():
         ObservationStamped(URIRef("urn:test:right"), URIRef("urn:test:p"), 1.0, right),
     ]
 
-    assert poses_are_collocated(observations)
+    result, reason = poses_are_collocated(observations)
+    assert result
+    assert "within collocation threshold" in reason
     right.position.x = 0.011
-    assert not poses_are_collocated(observations)
+    result, reason = poses_are_collocated(observations)
+    assert not result
+    assert "exceeds collocation threshold" in reason
+
+
+def test_collision_evaluator_matches_one_current_group():
+    from bdd_exec_ros2.observation import (
+        collision_stamp,
+        targets_do_not_collide,
+    )
+
+    msg = Collision()
+    msg.stamp.sec = 4
+    msg.bodies = ["object", "workspace"]
+    assert collision_stamp(msg, 99.0) == 4.0
+
+    group = frozenset(msg.bodies)
+    observations = [
+        ObservationStamped(
+            URIRef("urn:test:object-observation"),
+            URIRef("urn:test:collision-provider"),
+            4.0,
+            group,
+        ),
+        ObservationStamped(
+            URIRef("urn:test:workspace-observation"),
+            URIRef("urn:test:collision-provider"),
+            4.0,
+            group,
+        ),
+    ]
+    result, reason = targets_do_not_collide(observations)
+    assert result is False
+    assert "object" in reason and "workspace" in reason
+
+    observations.append(
+        ObservationStamped(
+            URIRef("urn:test:third-target"),
+            URIRef("urn:test:collision-provider"),
+            4.0,
+            group,
+        )
+    )
+    result, reason = targets_do_not_collide(observations)
+    assert result is False
+    assert all(body in reason for body in ("object", "workspace"))
+
+    msg.bodies = []
+    clear_group = frozenset()
+    observations = [
+        ObservationStamped(
+            observation.observation_uri,
+            observation.provider_uri,
+            observation.stamp,
+            clear_group,
+        )
+        for observation in observations
+    ]
+    result, reason = targets_do_not_collide(observations)
+    assert result is True
+    assert "no active collision" in reason
 
 
 def test_place_behaviour_forwards_workspace_parameter():
@@ -116,10 +179,10 @@ def test_place_behaviour_forwards_workspace_parameter():
 
     messages = get_bhv_param_messages(when_bhv, values)
 
-    assert {message.param_rel_uri for message in messages} == {
-        URI_BHV_PRED_TARGET_OBJ.toPython(),
-        URI_BHV_PRED_TARGET_AGN.toPython(),
-        URI_BHV_PRED_TARGET_WS.toPython(),
+    assert {message.variable_uri for message in messages} == {
+        object_var.toPython(),
+        agent_var.toPython(),
+        workspace_var.toPython(),
     }
 
 

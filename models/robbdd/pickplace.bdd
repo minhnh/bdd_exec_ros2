@@ -7,6 +7,8 @@ Task (ns=bdd_tmpl) tsk_pickplace
 Event (ns=bdd_tmpl) evt-scr-start
 Event (ns=bdd_tmpl) evt-scr-end
 Event (ns=bdd_tmpl) evt-pick-start
+Event (ns=bdd_tmpl) evt-pick-end
+Event (ns=bdd_tmpl) evt-place-start
 Event (ns=bdd_tmpl) evt-place-end
 
 Scenario Template (ns=bdd_tmpl) tmpl_pickplace {
@@ -28,8 +30,17 @@ Scenario Template (ns=bdd_tmpl) tmpl_pickplace {
             <robot> picks <target_object> and places at <place_ws>
         }
     Then:
-        fc-located-after: holds(
-            <target_object> is located at <place_ws>, 5 seconds after <evt-place-end>
+        (
+            fc-located-after: holds(
+                <target_object> is located at <place_ws>, 5 seconds after <evt-place-end>
+            )
+            and
+            fc-no-collision: holds(
+                pred(
+                    '"{target_object}" does not collide with "{place_ws}"',
+                    target_object=<target_object>, place_ws=<place_ws>
+                ), from <evt-pick-end> until <evt-place-end>
+            )
         )
 }
 

@@ -450,6 +450,8 @@ class BddCoordNode(Node):
                 return
 
             trin_rep = f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
+            if msg.reason:
+                trin_rep += f", reason: {msg.reason}"
 
             forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
             trin_st, ctx_uuid = from_trin_stamped_msg(msg)
