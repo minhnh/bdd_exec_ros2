@@ -115,10 +115,23 @@ not named `world`.
 ### Test Result Visualizer
 
 The [`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) script visualizes trinaries and
-clause assertions for each executed scenario variation. A successful mockup test execution should
-appear like the following:
+clause assertions for each executed scenario variation, including their result reasons. The RobBDD
+mockup model includes a no-collision policy. Run it with `simulate_collision:=true` to see the
+policy fail and its affected bodies reported in the visualizer:
 
-![Visualizer screenshot](./docs/visualizer-sceenshot.png)
+```bash
+ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml simulate_collision:=true
+ros2 run bdd_exec_ros2 visualizer
+ros2 topic pub /bdd/start std_msgs/msg/Empty "{}" -1
+```
+
+Without collision messages, the policy defaults to a successful `no collision recorded` result.
+Custom RobBDD observation policies now reference evaluator classes, for example
+`bdd_exec_ros2.observation.TargetsDoNotCollideEvaluator`, which own their result and reason.
+
+<video src="./docs/visualizer-obs_with_collisions.webm" controls>
+  Visualizer demo with collision observations
+</video>
 
 ### Mockup Behaviour Server
 
