@@ -9,5 +9,6 @@
     use_sim_time: False
     loop_duration: 0.01       # duration in seconds for step events
     heartbeat_duration: 0.04  # duration in seconds for callback
+    simulate_collision: false
     delay_lower: 0.1          # lower range of duration for each state
     delay_upper: 0.15         # upper range of duration for each state

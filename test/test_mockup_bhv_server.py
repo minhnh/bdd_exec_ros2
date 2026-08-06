@@ -20,12 +20,12 @@ import launch_testing.actions
 import pytest
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_OBJ
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import ParamValue, Trinary
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from rclpy.action import ActionClient
+from rdf_utils.namespace import URL_SECORO_M
 from rdflib import Namespace
 
 from launch import LaunchDescription
@@ -80,7 +80,9 @@ class TestBehaviourActionServer(unittest.TestCase):
         )
         self.goal = Behaviour.Goal()
         param = ParamValue()
-        param._param_rel_uri = URI_BHV_PRED_TARGET_OBJ.toPython()
+        param.variable_uri = (
+            f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/var-target_object"
+        )
         param.param_val_uris = [TEST_NS["cube"].toPython()]
         self.goal.parameters = [param]
 

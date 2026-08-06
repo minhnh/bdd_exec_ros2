@@ -29,12 +29,30 @@ obs policy (ns=bdd_exec_ros) fcx-located-after-detections
     }
     py { module: bdd_exec_ros2.observation, attr: poses_are_collocated }
 }
+obs provider (ns=bdd_exec_ros) collisions {
+    ros topic: "/observations/collision"
+    type: "bdd_ros2_interfaces/msg/Collision"
+}
+obs policy (ns=bdd_exec_ros) fcx-no-collision
+    for <tmpl_pickplace.fc-no-collision>
+{
+    observation object-collision {
+        provider: <collisions>
+        observes: <tmpl_pickplace.target_object>
+    }
+    observation workspace-collision {
+        provider: <collisions>
+        observes: <tmpl_pickplace.place_ws>
+    }
+    py { module: bdd_exec_ros2.observation, attr: targets_do_not_collide }
+}
 Scenario Exec (ns=bdd_exec) pickplace-mockup-ros {
     variant: <sim_pickplace.pickplace_table>
     scene inst: <pickplace_scene_mjc>
     bhv: <mockup-pp-server>
     policies: {
         <fcx-located-before-topic>,
-        <fcx-located-after-detections>
+        <fcx-located-after-detections>,
+        <fcx-no-collision>
     }
 }

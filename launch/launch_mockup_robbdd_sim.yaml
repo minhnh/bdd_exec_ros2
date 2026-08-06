@@ -16,6 +16,9 @@ launch:
   - arg:
       name: "world_entity_name"
       default: "world"
+  - arg:
+      name: "simulate_collision"
+      default: "false"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
@@ -38,3 +41,5 @@ launch:
       name: "mockup_behaviour"
       param:
         - from: "$(var config)"
+        - name: "simulate_collision"
+          value: "$(var simulate_collision)"

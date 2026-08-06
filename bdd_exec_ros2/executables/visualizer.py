@@ -32,9 +32,11 @@ from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
+    QPushButton,
     QStyle,
     QStyledItemDelegate,
     QTreeWidget,
@@ -116,6 +118,8 @@ def update_scr_item_view(
         ColumnIdx.RESULT_TIME.value,
         format_time_msg(scr_status.result.stamp, use_sim_time=use_sim_time),
     )
+    scr_item.setText(ColumnIdx.DETAILS.value, scr_status.result.reason)
+    scr_item.setToolTip(ColumnIdx.RESULT.value, scr_status.result.reason)
 
     # start/end time
     if scr_status.start_time.sec > 0:
@@ -147,6 +151,8 @@ def update_fluent_item_view(
 ):
     trinary_values = [t.trinary.value for t in fl_status.trinaries]
     fl_item.setData(ColumnIdx.DETAILS.value, Qt.UserRole, trinary_values)
+    fl_item.setToolTip(ColumnIdx.DETAILS.value, fl_status.result.reason)
+    fl_item.setToolTip(ColumnIdx.RESULT.value, fl_status.result.reason)
 
     # Result
     trin_val = fl_status.result.trinary.value
@@ -184,6 +190,8 @@ def update_bhv_item_view(
         ColumnIdx.RESULT_TIME.value,
         format_time_msg(bhv_status.result.stamp, use_sim_time=use_sim_time),
     )
+    bhv_item.setText(ColumnIdx.DETAILS.value, bhv_status.result.reason)
+    bhv_item.setToolTip(ColumnIdx.RESULT.value, bhv_status.result.reason)
 
 
 def create_new_trin_item(
@@ -204,6 +212,8 @@ def create_new_trin_item(
         ColumnIdx.RESULT_TIME.value,
         format_time_msg(trin_msg.stamp, use_sim_time=use_sim_time),
     )
+    trin_item.setText(ColumnIdx.DETAILS.value, trin_msg.reason)
+    trin_item.setToolTip(ColumnIdx.RESULT.value, trin_msg.reason)
 
     return trin_item
 
@@ -317,8 +327,14 @@ class BddVisualizer(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
+        header_layout = QHBoxLayout()
         self.lbl_status = QLabel(f"Listening on {status_topic}...")
-        layout.addWidget(self.lbl_status)
+        header_layout.addWidget(self.lbl_status)
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.clicked.connect(self.clear_entries)
+        header_layout.addStretch()
+        header_layout.addWidget(self.clear_button)
+        layout.addLayout(header_layout)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels([COLUMN_NAMES[cl_idx] for cl_idx in ColumnIdx])
@@ -330,9 +346,9 @@ class BddVisualizer(QMainWindow):
         self.tree.setColumnWidth(ColumnIdx.SCENARIO_FLUENT.value, 600)
         header.setMinimumSectionSize(200)
 
-        header.setSectionResizeMode(
-            ColumnIdx.DETAILS.value, QHeaderView.ResizeToContents
-        )
+        header.setSectionResizeMode(ColumnIdx.DETAILS.value, QHeaderView.Interactive)
+        self.tree.setColumnWidth(ColumnIdx.DETAILS.value, 420)
+        header.setStretchLastSection(False)
         self.tree.setItemDelegateForColumn(
             ColumnIdx.DETAILS.value,
             TrinaryHistoryDelegate(self.tree, font_size=font_size),
@@ -358,6 +374,11 @@ class BddVisualizer(QMainWindow):
         self.ros_thread.sim_time_changed.connect(self.set_use_sim_time)
         self.ros_thread.message_received.connect(self.update_ui)
         self.ros_thread.start()
+
+    @Slot()
+    def clear_entries(self):
+        self.tree.clear()
+        self._scenario_items.clear()
 
     @Slot(bool)
     def set_use_sim_time(self, enabled: bool):

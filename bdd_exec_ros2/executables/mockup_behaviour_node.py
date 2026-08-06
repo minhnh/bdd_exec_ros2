@@ -16,13 +16,8 @@ from random import random
 
 import rclpy
 from bdd_dsl.models.observation import EntityObservation
-from bdd_dsl.models.urirefs import (
-    URI_BHV_PRED_TARGET_AGN,
-    URI_BHV_PRED_TARGET_OBJ,
-    URI_BHV_PRED_TARGET_WS,
-)
 from bdd_ros2_interfaces.action import Behaviour
-from bdd_ros2_interfaces.msg import Event, Trinary, TrinaryStamped
+from bdd_ros2_interfaces.msg import Collision, Event, Trinary, TrinaryStamped
 from coord_dsl.event_loop import reconfig_event_buffers
 from coord_dsl.fsm import FSMData, consume_event, fsm_step, produce_event
 from rclpy.action.server import ActionServer, CancelResponse
@@ -39,6 +34,8 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import (
     create_fsm,
 )
 from bdd_exec_ros2.observation import (
+    collision_stamp,
+    collision_target_mapper,
     detection3d_stamp,
     map_detection3d_entity_by_dict,
 )
@@ -47,6 +44,7 @@ __DEFAULT_NODE_NAME = "mockup_behaviour"
 TOPIC_LOCATED_PICK = "/obs_policy/located_at_pick_ws"
 TOPIC_IS_HELD = "/obs_policy/is_held"
 TOPIC_DETECTIONS_3D = "/obs_policy/detections_3d"
+TOPIC_COLLISION = "/observations/collision"
 
 NS_M_TMPL = Namespace(f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/")
 NS_M_ENV_SECORO = Namespace(f"{URL_SECORO_M}/environments/secorolab/")
@@ -69,14 +67,29 @@ MOCKUP_DETECTION3D_ENTITY_URIS = {
 MOCKUP_ENTITY_DETECTION3D_IDS = {
     uri: entity_id for entity_id, uri in MOCKUP_DETECTION3D_ENTITY_URIS.items()
 }
+MOCKUP_COLLISION_WORKSPACE_BODY_IDS = {
+    NS_M_ENV_SECORO["tomato_soup_can"]: "/spawned/soup_can",
+    NS_M_ENV_SECORO["mustard_bottle"]: "/spawned/mustard",
+    NS_M_ENV_SECORO["dex_cube"]: "/spawned/cube",
+    NS_M_ENV_SECORO["box1_ws"]: "/spawned/box1",
+    NS_M_ENV_SECORO["box2_ws"]: "/spawned/box2",
+    NS_M_ENV_SECORO["table"]: "/background/table_low_327",
+}
 
 
-def map_detection3d_entity_mockup(observation: Detection3D) -> list[EntityObservation]:
+def map_detection3d_entity_mockup(
+    observation: Detection3D,
+    scene_instance: object = None,
+    targets: list[URIRef] | None = None,
+) -> list[EntityObservation]:
+    del scene_instance
+    del targets
     return map_detection3d_entity_by_dict(observation, MOCKUP_DETECTION3D_ENTITY_URIS)
 
 
 TOPIC_OBSERVATION_ADAPTERS = {
-    Detection3D: (detection3d_stamp, map_detection3d_entity_mockup)
+    Detection3D: (detection3d_stamp, map_detection3d_entity_mockup),
+    Collision: (collision_stamp, collision_target_mapper),
 }
 
 
@@ -183,6 +196,7 @@ class MockupBhvNode(Node):
     heartbeat_duration: float
     delay_lower: float
     delay_upper: float
+    simulate_collision: bool
     server_name: str
     _action_server: ActionServer
 
@@ -195,6 +209,7 @@ class MockupBhvNode(Node):
         self.declare_parameter("delay_lower", 2.0)
         self.declare_parameter("delay_upper", 4.0)
         self.declare_parameter("bhv_server_name", "bhv_server")
+        self.declare_parameter("simulate_collision", False)
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
@@ -214,6 +229,8 @@ class MockupBhvNode(Node):
 
         self.delay_lower = self.get_parameter("delay_lower").value
         self.delay_upper = self.get_parameter("delay_upper").value
+        self.simulate_collision = self.get_parameter("simulate_collision").value
+        self.get_logger().info(f"Simulate collision: {self.simulate_collision}")
         assert self.delay_lower > 2 * self.heartbeat_duration, (
             f"Lower range for state delay (lower={self.delay_lower}) must be at least 2 times the hearbheat duration (hb={self.heartbeat_duration})"
         )
@@ -252,6 +269,9 @@ class MockupBhvNode(Node):
         self.detections_pub = self.create_publisher(
             msg_type=Detection3D, topic=TOPIC_DETECTIONS_3D, qos_profile=10
         )
+        self.collision_pub = self.create_publisher(
+            msg_type=Collision, topic=TOPIC_COLLISION, qos_profile=10
+        )
 
     def _publish_detection(self, entity_uri: URIRef) -> None:
         detection_id = MOCKUP_ENTITY_DETECTION3D_IDS.get(entity_uri)
@@ -263,6 +283,23 @@ class MockupBhvNode(Node):
         detection.id = detection_id
         detection.bbox.center.orientation.w = 1.0
         self.detections_pub.publish(detection)
+
+    def _publish_collision(
+        self, object_uris: list[URIRef], workspace_uris: list[URIRef]
+    ) -> None:
+        msg = Collision()
+        msg.stamp = self.get_clock().now().to_msg()
+        if self.simulate_collision:
+            msg.bodies = [
+                MOCKUP_COLLISION_WORKSPACE_BODY_IDS.get(
+                    entity_uri,
+                    MOCKUP_ENTITY_DETECTION3D_IDS.get(entity_uri),
+                )
+                for entity_uri in [*object_uris, *workspace_uris]
+                if entity_uri in MOCKUP_COLLISION_WORKSPACE_BODY_IDS
+                or entity_uri in MOCKUP_ENTITY_DETECTION3D_IDS
+            ]
+        self.collision_pub.publish(msg)
 
     def cancel_callback(self, goal_handle):
         self.get_logger().info("Canceling goal...")
@@ -281,9 +318,16 @@ class MockupBhvNode(Node):
         obj_str = None
         object_uris = []
         workspace_uris = []
+        variable_names = {
+            NS_M_TMPL["var-target_object"]: "target_object",
+            NS_M_TMPL["var-place_ws"]: "place_ws",
+            NS_M_TMPL["var-robot"]: "robot",
+        }
         for param_val in goal_handle.request.parameters:
-            rel_uri = URIRef(param_val.param_rel_uri)
-            self.get_logger().info(f"- Parameter relation: {rel_uri.n3(NS_MANAGER)}")
+            variable_uri = URIRef(param_val.variable_uri)
+            self.get_logger().info(
+                f"- Behaviour variable {variable_names.get(variable_uri, variable_uri.n3(NS_MANAGER))}"
+            )
 
             val_uris = []
             for val_uri_str in param_val.param_val_uris:
@@ -291,14 +335,14 @@ class MockupBhvNode(Node):
                 val_uris.append(val_uri)
                 self.get_logger().info(f"  + Parameter value: {val_uri.n3(NS_MANAGER)}")
 
-            if rel_uri == URI_BHV_PRED_TARGET_OBJ:
+            if variable_uri == NS_M_TMPL["var-target_object"]:
                 object_uris = val_uris
                 obj_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
 
-            if rel_uri == URI_BHV_PRED_TARGET_WS:
+            if variable_uri == NS_M_TMPL["var-place_ws"]:
                 workspace_uris = val_uris
 
-            if rel_uri == URI_BHV_PRED_TARGET_AGN:
+            if variable_uri == NS_M_TMPL["var-robot"]:
                 agn_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
 
         for cfg_msg in goal_handle.request.configs:
@@ -315,6 +359,7 @@ class MockupBhvNode(Node):
         trinary_msg = TrinaryStamped()
         trinary_msg.scenario_context_id = ctx_id
         trinary_msg.trinary.value = Trinary.TRUE
+        self._publish_collision([], [])
         while True:
             # Ensure loop rate & produce step event
             now = time.time()
@@ -363,6 +408,7 @@ class MockupBhvNode(Node):
                     self.located_pick_pub.publish(trinary_msg)
                 elif pp_fsm.current_state_index == StateID.S_APPROACH and ud.placing:
                     self.is_held_pub.publish(trinary_msg)
+                self._publish_collision(object_uris, workspace_uris)
 
             # execute behaviour
             fsm_mockup_bhv(fsm=pp_fsm, ud=ud)

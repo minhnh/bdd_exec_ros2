@@ -220,9 +220,9 @@ def from_trin_stamped_msg(msg: TrinaryStampedMsg) -> tuple[TrinaryStamped, UUID]
     else:
         raise ValueError(f"Invalid trinary value in ROS message: {msg.trinary.value}")
 
-    return TrinaryStamped(stamp=epoch_t, trinary=trin), from_uuid_msg(
-        msg.scenario_context_id
-    )
+    return TrinaryStamped(
+        stamp=epoch_t, trinary=trin, reason=msg.reason
+    ), from_uuid_msg(msg.scenario_context_id)
 
 
 def to_trin_msg(trin: Trinary | bool) -> TrinaryMsg:
@@ -242,12 +242,13 @@ def to_trin_stamped_msg(trin_st: TrinaryStamped) -> TrinaryStampedMsg:
     trin_st_msg = TrinaryStampedMsg()
     trin_st_msg.stamp = Time(seconds=trin_st.stamp).to_msg()
     trin_st_msg.trinary = to_trin_msg(trin_st.trinary)
+    trin_st_msg.reason = trin_st.reason
     return trin_st_msg
 
 
-def to_paramval_message(rel_uri: URIRef, val: Any) -> ParamValue:
+def to_paramval_message(variable_uri: URIRef, val: Any) -> ParamValue:
     param = ParamValue()
-    param.param_rel_uri = rel_uri.toPython()
+    param.variable_uri = variable_uri.toPython()
     if isinstance(val, URIRef):
         param.param_val_uris = [val.toPython()]
         return param
@@ -278,7 +279,7 @@ def get_bhv_param_messages(
         assert obj_var_uri in var_value_dict, f"no value for '{obj_var_uri}'"
         param_vals.append(
             to_paramval_message(
-                rel_uri=URI_BHV_PRED_TARGET_OBJ, val=var_value_dict[obj_var_uri]
+                variable_uri=obj_var_uri, val=var_value_dict[obj_var_uri]
             )
         )
 
@@ -287,7 +288,7 @@ def get_bhv_param_messages(
         assert agn_var_uri in var_value_dict, f"no value for '{agn_var_uri}'"
         param_vals.append(
             to_paramval_message(
-                rel_uri=URI_BHV_PRED_TARGET_AGN, val=var_value_dict[agn_var_uri]
+                variable_uri=agn_var_uri, val=var_value_dict[agn_var_uri]
             )
         )
 
@@ -296,9 +297,7 @@ def get_bhv_param_messages(
         assert ws_var_uri is not None
         assert ws_var_uri in var_value_dict, f"no value for '{ws_var_uri}'"
         param_vals.append(
-            to_paramval_message(
-                rel_uri=URI_BHV_PRED_TARGET_WS, val=var_value_dict[ws_var_uri]
-            )
+            to_paramval_message(variable_uri=ws_var_uri, val=var_value_dict[ws_var_uri])
         )
 
     return param_vals
@@ -356,13 +355,15 @@ def to_scenario_status_msg(
     scr_status.fluents = []
     fluent_results = []
     for obs_pol in obs_manager.obs_policies.values():
-        fl_res = TrinaryStamped(
-            stamp=now_stamp,
-            trinary=trinaries_policy(obs_pol.trinary_timeline),
-        )
+        fl_value, fl_reason = trinaries_policy(obs_pol.trinary_timeline)
         # Always set config result to true for now
         if URI_BDD_TYPE_CONFIG in obs_pol.fluent_types:
-            fl_res.trinary = True
+            fl_value, fl_reason = True, "configuration successful"
+        fl_res = TrinaryStamped(
+            stamp=now_stamp,
+            trinary=fl_value,
+            reason=fl_reason,
+        )
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()
@@ -381,9 +382,20 @@ def to_scenario_status_msg(
 
     scr_status.result.stamp = now_msg
     if obs_manager.bhv_result is None:
-        bhv_result = TrinaryStamped(stamp=now_stamp, trinary=Unknown)
+        bhv_result = TrinaryStamped(
+            stamp=now_stamp,
+            trinary=Unknown,
+            reason="",
+        )
     else:
         bhv_result = obs_manager.bhv_result
     fluent_results.append(bhv_result)
-    scr_status.result.trinary = to_trin_msg(trinaries_policy(fluent_results))
+    scenario_value, _ = trinaries_policy(fluent_results)
+    scr_status.result = to_trin_stamped_msg(
+        TrinaryStamped(
+            stamp=now_stamp,
+            trinary=scenario_value,
+            reason="",
+        )
+    )
     return scr_status
