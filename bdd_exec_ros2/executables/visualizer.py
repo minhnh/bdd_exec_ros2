@@ -347,7 +347,7 @@ class BddVisualizer(QMainWindow):
         header.setMinimumSectionSize(200)
 
         header.setSectionResizeMode(ColumnIdx.DETAILS.value, QHeaderView.Interactive)
-        self.tree.setColumnWidth(ColumnIdx.DETAILS.value, 420)
+        self.tree.setColumnWidth(ColumnIdx.DETAILS.value, 600)
         header.setStretchLastSection(False)
         self.tree.setItemDelegateForColumn(
             ColumnIdx.DETAILS.value,

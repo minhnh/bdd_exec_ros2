@@ -35,10 +35,12 @@ from bdd_exec_ros2.executables.mockup_behaviour_node import (
     map_detection3d_entity_mockup,
 )
 from bdd_exec_ros2.observation import (
+    PosesAreCollocatedEvaluator,
+    TargetsDoNotCollideEvaluator,
+    collision_stamp,
     detection3d_stamp,
     map_detection3d_entity_by_dict,
     map_simulation_pose_snapshot,
-    poses_are_collocated,
     simulation_pose_snapshot_stamp,
 )
 
@@ -90,21 +92,16 @@ def test_pose_evaluator_requires_collocated_observations():
         ObservationStamped(URIRef("urn:test:right"), URIRef("urn:test:p"), 1.0, right),
     ]
 
-    result, reason = poses_are_collocated(observations)
+    result, reason = PosesAreCollocatedEvaluator().evaluate(observations)
     assert result
     assert "within collocation threshold" in reason
     right.position.x = 0.011
-    result, reason = poses_are_collocated(observations)
+    result, reason = PosesAreCollocatedEvaluator().evaluate(observations)
     assert not result
     assert "exceeds collocation threshold" in reason
 
 
 def test_collision_evaluator_matches_one_current_group():
-    from bdd_exec_ros2.observation import (
-        collision_stamp,
-        targets_do_not_collide,
-    )
-
     msg = Collision()
     msg.stamp.sec = 4
     msg.bodies = ["object", "workspace"]
@@ -125,7 +122,7 @@ def test_collision_evaluator_matches_one_current_group():
             group,
         ),
     ]
-    result, reason = targets_do_not_collide(observations)
+    result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is False
     assert "object" in reason and "workspace" in reason
 
@@ -137,7 +134,7 @@ def test_collision_evaluator_matches_one_current_group():
             group,
         )
     )
-    result, reason = targets_do_not_collide(observations)
+    result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is False
     assert all(body in reason for body in ("object", "workspace"))
 
@@ -152,9 +149,14 @@ def test_collision_evaluator_matches_one_current_group():
         )
         for observation in observations
     ]
-    result, reason = targets_do_not_collide(observations)
+    result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is True
     assert "no active collision" in reason
+
+
+def test_collision_evaluator_defaults_to_no_collision():
+    evaluator = TargetsDoNotCollideEvaluator()
+    assert evaluator.evaluate([]) == (True, "no collision recorded")
 
 
 def test_place_behaviour_forwards_workspace_parameter():
