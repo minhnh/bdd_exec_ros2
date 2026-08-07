@@ -22,7 +22,7 @@ Scenario Template (ns=bdd_tmpl) tmpl_pickplace {
 
     Given:
         fc-located-before: holds(
-            <target_object> is located at <pick_ws>, 2 seconds before <evt-pick-start>
+            <target_object> is located at <pick_ws>, before <evt-pick-start>
         )
     When:
         Behaviour (ns=bdd_tmpl) pickplace {
@@ -32,7 +32,7 @@ Scenario Template (ns=bdd_tmpl) tmpl_pickplace {
     Then:
         (
             fc-located-after: holds(
-                <target_object> is located at <place_ws>, 5 seconds after <evt-place-end>
+                <target_object> is located at <place_ws>, after <evt-place-end>
             )
             and
             fc-no-collision: holds(

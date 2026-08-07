@@ -9,6 +9,7 @@ bhv impl (ns=bdd_exec_ros) mockup-pp-server {
 
 obs policy (ns=bdd_exec_ros) fcx-located-before-topic
     for <tmpl_pickplace.fc-located-before>
+    horizon: 2 seconds
 {
     trinary topic: "/obs_policy/located_at_pick_ws"
 }
@@ -18,6 +19,7 @@ obs provider (ns=bdd_exec_ros) detections-3d {
 }
 obs policy (ns=bdd_exec_ros) fcx-located-after-detections
     for <tmpl_pickplace.fc-located-after>
+    horizon: 5 seconds
 {
     observation object-pose {
         provider: <detections-3d>
