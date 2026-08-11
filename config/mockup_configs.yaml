@@ -1,6 +1,5 @@
 /bdd/test_coordinator:
   ros__parameters:
-    topic_observation_adapters: "bdd_exec_ros2.executables.mockup_behaviour_node:TOPIC_OBSERVATION_ADAPTERS"
     event_topic: "/bdd/events"
     bhv_server_name: "/bdd/mockup_bhv_server"
     status_timer_period: 0.5

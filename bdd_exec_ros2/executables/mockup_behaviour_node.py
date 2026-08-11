@@ -34,9 +34,6 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import (
     create_fsm,
 )
 from bdd_exec_ros2.observation import (
-    collision_stamp,
-    collision_target_mapper,
-    detection3d_stamp,
     map_detection3d_entity_by_dict,
 )
 
@@ -85,12 +82,6 @@ def map_detection3d_entity_mockup(
     del scene_instance
     del targets
     return map_detection3d_entity_by_dict(observation, MOCKUP_DETECTION3D_ENTITY_URIS)
-
-
-TOPIC_OBSERVATION_ADAPTERS = {
-    Detection3D: (detection3d_stamp, map_detection3d_entity_mockup),
-    Collision: (collision_stamp, collision_target_mapper),
-}
 
 
 EXPORTED_EVENTS = {

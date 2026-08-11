@@ -16,16 +16,13 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
-from importlib import import_module
 from typing import Any
 from uuid import UUID, uuid4
 
 import rclpy
 from ament_index_python import get_package_share_directory
 from bdd_dsl.models.observation import (
-    EntityObservationMapperProtocol,
     ObservationManager,
-    TimestampedObservationProtocol,
     trin_policy_and,
 )
 from bdd_dsl.models.urirefs import (
@@ -87,8 +84,6 @@ from bdd_exec_ros2.conversions import (
 from bdd_exec_ros2.observation import (
     load_ros_action_model,
     load_ros_topic_model,
-    map_simulation_pose_snapshot,
-    simulation_pose_snapshot_stamp,
 )
 from bdd_exec_ros2.sim_interfaces import PosePollingHandle, SimInterface
 
@@ -98,34 +93,6 @@ __DEFAULT_NODE_NAME = "test_coordinator"
 class SceneSetupMode(StrEnum):
     NONE = "none"
     SIMULATION = "simulation"
-
-
-def _load_topic_observation_adapters(
-    module_attr: str,
-) -> dict[
-    type, tuple[TimestampedObservationProtocol, EntityObservationMapperProtocol | None]
-]:
-    module_name, separator, attr_name = module_attr.partition(":")
-    if not separator or not module_name or not attr_name:
-        raise ValueError(
-            "topic_observation_adapters must be a 'module:attribute' reference"
-        )
-    adapters = getattr(import_module(module_name), attr_name)
-    if not isinstance(adapters, dict):
-        raise TypeError("topic_observation_adapters attribute must be a dict")
-    for message_type, adapter in adapters.items():
-        if not isinstance(adapter, tuple) or len(adapter) != 2:
-            raise TypeError(
-                f"adapter for {message_type} must be a (timestamp, mapper) tuple"
-            )
-        timestamp_extractor, entity_mapper = adapter
-        if not callable(timestamp_extractor) or (
-            entity_mapper is not None and not callable(entity_mapper)
-        ):
-            raise TypeError(
-                f"adapter for {message_type} contains a non-callable extractor"
-            )
-    return adapters
 
 
 def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
@@ -223,10 +190,6 @@ class BddCoordNode(Node):
     _topic_observation_reg: dict[tuple[str, type], dict[UUID, set[URIRef]]]
     _observation_subs: dict[tuple[str, type], Subscription]
     _simulation_observation_handles: dict[tuple[UUID, URIRef], PosePollingHandle]
-    _topic_observation_adapters: dict[
-        type,
-        tuple[TimestampedObservationProtocol, EntityObservationMapperProtocol | None],
-    ]
 
     _action_client: ActionClient
     _evt_pub: Publisher
@@ -236,7 +199,6 @@ class BddCoordNode(Node):
     def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
         super().__init__(node_name)
         self.timeout_sec = timeout_sec
-        self._topic_observation_adapters = {}
 
         self.declare_parameter("bhv_server_name", "bhv_server")
         self.declare_parameter("start_test_topic", "start")
@@ -247,14 +209,6 @@ class BddCoordNode(Node):
         self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE.value)
         self.declare_parameter("simulation_service_namespace", "/")
         self.declare_parameter("world_entity_name", "world")
-        self.declare_parameter("topic_observation_adapters", "")
-        adapter_ref = self.get_parameter("topic_observation_adapters").value
-        if not isinstance(adapter_ref, str):
-            raise TypeError("topic_observation_adapters must be a string")
-        if adapter_ref:
-            self._topic_observation_adapters = _load_topic_observation_adapters(
-                adapter_ref
-            )
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
@@ -535,11 +489,6 @@ class BddCoordNode(Node):
         assert isinstance(topic_name, str) and msg_type is not None, (
             f"invalid attrs for {provider.id}: topic={topic_name}, msg_type={msg_type}"
         )
-        adapter = self._topic_observation_adapters.get(msg_type)
-        if adapter is None:
-            obs_manager.register_provider(provider.id)
-        else:
-            obs_manager.register_provider(provider.id, *adapter)
         topic_key = (topic_name, msg_type)
 
         with self._scr_lock:
@@ -586,11 +535,6 @@ class BddCoordNode(Node):
                 )
             elif URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER in provider.types:
                 simulation_rates[provider_uri] = get_update_rate(self.graph, provider)
-                obs_manager.register_provider(
-                    provider_uri,
-                    simulation_pose_snapshot_stamp,
-                    map_simulation_pose_snapshot,
-                )
 
         scr_rep = ScenarioVariantRep(
             scr_var=scr_var,

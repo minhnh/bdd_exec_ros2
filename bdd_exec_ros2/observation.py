@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from collections.abc import Mapping
-from math import sqrt
 
 from bdd_dsl.models.observation import (
     EntityObservation,
@@ -85,10 +84,11 @@ def map_detection3d_entity_by_dict(
     entity_uri = entity_by_id.get(observation.id)
     if entity_uri is None:
         return []
-    return [EntityObservation(entity_uri, observation.bbox.center)]
+    position = observation.bbox.center.position
+    return [EntityObservation(entity_uri, (position.x, position.y, position.z))]
 
 
-def simulation_pose_snapshot_stamp(
+def latest_identified_pose_stamp(
     poses: Mapping[URIRef, PoseStamped], receipt_stamp: float
 ) -> float:
     source_stamps = (
@@ -97,34 +97,18 @@ def simulation_pose_snapshot_stamp(
     return max((stamp for stamp in source_stamps if stamp), default=receipt_stamp)
 
 
-def map_simulation_pose_snapshot(
+def map_identified_pose_batch(
     poses: Mapping[URIRef, PoseStamped],
     scene_instance: SceneInstanceModel | None = None,
     targets: list[URIRef] | None = None,
 ) -> list[EntityObservation]:
     return [
-        EntityObservation(entity_uri, pose.pose) for entity_uri, pose in poses.items()
+        EntityObservation(
+            entity_uri,
+            (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z),
+        )
+        for entity_uri, pose in poses.items()
     ]
-
-
-class PosesAreCollocatedEvaluator(ObservationPolicyEvaluator):
-    def _evaluate_samples(
-        self, observations: list[ObservationStamped]
-    ) -> tuple[bool, str]:
-        if len(observations) != 2:
-            raise ValueError(f"expected two pose observations, got {len(observations)}")
-        left, right = (sample.value.position for sample in observations)
-        distance_squared = (
-            (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2
-        )
-        distance = sqrt(distance_squared)
-        threshold = 0.01
-        result = distance <= threshold
-        comparison = "within" if result else "exceeds"
-        return result, (
-            f"pose distance {distance:.4f} m {comparison} "
-            f"collocation threshold {threshold:.4f} m"
-        )
 
 
 def collision_stamp(observation: Collision, receipt_stamp: float) -> float:
