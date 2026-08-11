@@ -23,13 +23,17 @@ obs policy (ns=bdd_exec_ros) fcx-located-after-detections
 {
     observation object-pose {
         provider: <detections-3d>
-        observes: <tmpl_pickplace.target_object>
+        observes var <tmpl_pickplace.target_object>
     }
     observation workspace-pose {
         provider: <detections-3d>
-        observes: <tmpl_pickplace.place_ws>
+        observes var <tmpl_pickplace.place_ws>
     }
-    py { module: bdd_exec_ros2.observation, attr: PosesAreCollocatedEvaluator }
+    time extractor: py { module: bdd_exec_ros2.observation, attr: detection3d_stamp }
+    entity mapper: py { module: bdd_exec_ros2.executables.mockup_behaviour_node, attr: map_detection3d_entity_mockup }
+    evaluator: linear distance {
+        equals: 0 m tolerance: 0.01 m
+    }
 }
 obs provider (ns=bdd_exec_ros) collisions {
     ros topic: "/observations/collision"
@@ -40,13 +44,15 @@ obs policy (ns=bdd_exec_ros) fcx-no-collision
 {
     observation object-collision {
         provider: <collisions>
-        observes: <tmpl_pickplace.target_object>
+        observes var <tmpl_pickplace.target_object>
     }
     observation workspace-collision {
         provider: <collisions>
-        observes: <tmpl_pickplace.place_ws>
+        observes var <tmpl_pickplace.place_ws>
     }
-    py { module: bdd_exec_ros2.observation, attr: TargetsDoNotCollideEvaluator }
+    time extractor: py { module: bdd_exec_ros2.observation, attr: collision_stamp }
+    entity mapper: py { module: bdd_exec_ros2.observation, attr: collision_target_mapper }
+    evaluator: py { module: bdd_exec_ros2.observation, attr: TargetsDoNotCollideEvaluator }
 }
 Scenario Exec (ns=bdd_exec) pickplace-mockup-ros {
     variant: <sim_pickplace.pickplace_table>

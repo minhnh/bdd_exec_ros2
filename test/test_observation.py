@@ -35,17 +35,16 @@ from bdd_exec_ros2.executables.mockup_behaviour_node import (
     map_detection3d_entity_mockup,
 )
 from bdd_exec_ros2.observation import (
-    PosesAreCollocatedEvaluator,
     TargetsDoNotCollideEvaluator,
     collision_stamp,
     detection3d_stamp,
+    latest_identified_pose_stamp,
     map_detection3d_entity_by_dict,
-    map_simulation_pose_snapshot,
-    simulation_pose_snapshot_stamp,
+    map_identified_pose_batch,
 )
 
 
-def test_detection3d_adapter_extracts_stamp_and_mapped_pose():
+def test_detection3d_adapter_extracts_stamp_and_mapped_position():
     detection = Detection3D()
     detection.header.stamp.sec = 3
     detection.header.stamp.nanosec = 500_000_000
@@ -56,7 +55,7 @@ def test_detection3d_adapter_extracts_stamp_and_mapped_pose():
 
     assert detection3d_stamp(detection, 99.0) == 3.5
     assert mapped[0].entity_uri == MOCKUP_DETECTION3D_ENTITY_URIS[detection.id]
-    assert mapped[0].value.position.x == 0.2
+    assert mapped[0].value == (0.2, 0.0, 0.0)
     detection.id = "unmapped"
     assert (
         map_detection3d_entity_by_dict(detection, MOCKUP_DETECTION3D_ENTITY_URIS) == []
@@ -71,34 +70,17 @@ def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():
     poses[first].header.stamp = source_time.to_msg()
     receipt_stamp = 42.0
 
-    mapped = map_simulation_pose_snapshot(poses)
+    mapped = map_identified_pose_batch(poses)
 
-    assert simulation_pose_snapshot_stamp(poses, receipt_stamp) == ros_time_to_stamp(
+    assert latest_identified_pose_stamp(poses, receipt_stamp) == ros_time_to_stamp(
         source_time
     )
     assert {observation.entity_uri: observation.value for observation in mapped} == {
-        entity_uri: pose.pose for entity_uri, pose in poses.items()
+        first: (0.0, 0.0, 0.0),
+        second: (0.0, 0.0, 0.0),
     }
     poses[first].header.stamp = Time().to_msg()
-    assert simulation_pose_snapshot_stamp(poses, receipt_stamp) == receipt_stamp
-
-
-def test_pose_evaluator_requires_collocated_observations():
-    left = Detection3D().bbox.center
-    right = Detection3D().bbox.center
-    right.position.x = 0.009
-    observations = [
-        ObservationStamped(URIRef("urn:test:left"), URIRef("urn:test:p"), 1.0, left),
-        ObservationStamped(URIRef("urn:test:right"), URIRef("urn:test:p"), 1.0, right),
-    ]
-
-    result, reason = PosesAreCollocatedEvaluator().evaluate(observations)
-    assert result
-    assert "within collocation threshold" in reason
-    right.position.x = 0.011
-    result, reason = PosesAreCollocatedEvaluator().evaluate(observations)
-    assert not result
-    assert "exceeds collocation threshold" in reason
+    assert latest_identified_pose_stamp(poses, receipt_stamp) == receipt_stamp
 
 
 def test_collision_evaluator_matches_one_current_group():
