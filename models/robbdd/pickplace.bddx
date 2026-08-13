@@ -29,7 +29,7 @@ obs policy (ns=bdd_exec_ros) fcx-located-after-detections
         provider: <detections-3d>
         observes var <tmpl_pickplace.place_ws>
     }
-    time extractor: py { module: bdd_exec_ros2.observation, attr: detection3d_stamp }
+    time extractor: py { module: bdd_exec_ros2.observation, attr: detection3d_or_array_stamp }
     entity mapper: py { module: bdd_exec_ros2.executables.mockup_behaviour_node, attr: map_detection3d_entity_mockup }
     evaluator: linear distance {
         equals: 0 m tolerance: 0.01 m

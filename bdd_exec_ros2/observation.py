@@ -33,7 +33,7 @@ from rdflib import Graph, Literal, URIRef
 from rosidl_runtime_py.utilities import get_action, get_message
 from scene_dsl.rdf_parser.kinematics import get_kinematic_mappings
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
-from vision_msgs.msg import Detection3D
+from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
 
@@ -74,10 +74,6 @@ def load_ros_topic_model(graph: Graph, model: ModelBase, **kwargs):
     model.set_attr(key=URI_ROS_PRED_TYPE_NAME, val=msg_type)
 
 
-def detection3d_stamp(observation: Detection3D, _receipt_stamp: float) -> float:
-    return ros_time_to_stamp(Time.from_msg(observation.header.stamp))
-
-
 def map_detection3d_entity_by_dict(
     observation: Detection3D, entity_by_id: Mapping[str, URIRef]
 ) -> list[EntityObservation]:
@@ -86,6 +82,37 @@ def map_detection3d_entity_by_dict(
         return []
     position = observation.bbox.center.position
     return [EntityObservation(entity_uri, (position.x, position.y, position.z))]
+
+
+def detection3d_or_array_stamp(
+    observation: Detection3D | Detection3DArray, receipt_stamp: float
+) -> float:
+    stamp = ros_time_to_stamp(Time.from_msg(observation.header.stamp))
+    return stamp or receipt_stamp
+
+
+def map_detection3d_array_by_uri(
+    observation: Detection3DArray,
+    scene_instance: SceneInstanceModel | None = None,
+    targets: list[URIRef] | None = None,
+) -> list[EntityObservation]:
+    del scene_instance
+
+    target_set = set(targets) if targets is not None else None
+    mapped = []
+    for detection in observation.detections:
+        entity_uri = URIRef(detection.id) if detection.id else None
+        if (
+            entity_uri is None
+            or not detection.results
+            or (target_set is not None and entity_uri not in target_set)
+        ):
+            continue
+        position = detection.results[0].pose.pose.position
+        mapped.append(
+            EntityObservation(entity_uri, (position.x, position.y, position.z))
+        )
+    return mapped
 
 
 def latest_identified_pose_stamp(
