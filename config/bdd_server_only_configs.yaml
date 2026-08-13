@@ -4,3 +4,4 @@
     bhv_server_name: "/bhv_server"
     status_timer_period: 0.5
     use_sim_time: False
+    timeout: 60.0

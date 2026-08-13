@@ -196,13 +196,13 @@ class BddCoordNode(Node):
     _evt_sub: Subscription
     _scr_status_pub: Publisher
 
-    def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
+    def __init__(self, node_name: str) -> None:
         super().__init__(node_name)
-        self.timeout_sec = timeout_sec
 
         self.declare_parameter("bhv_server_name", "bhv_server")
         self.declare_parameter("start_test_topic", "start")
         self.declare_parameter("status_timer_period", 0.5)
+        self.declare_parameter("timeout", 5.0)
         self.declare_parameter("status_topic", "status")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
@@ -213,8 +213,14 @@ class BddCoordNode(Node):
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
         if not isinstance(use_sim_time, bool):
-            raise TypeError("use_sim_time not a bool")
+            raise TypeError(f"use_sim_time not a bool, got: {use_sim_time}")
         self._use_sim_time = use_sim_time
+
+        timeout_sec = self.get_parameter("timeout").value
+        self.get_logger().info(f"Timeout (seconds): {timeout_sec}")
+        if not isinstance(timeout_sec, float):
+            raise TypeError(f"'timeout' not a float, got: {timeout_sec}")
+        self.timeout_sec = timeout_sec
 
         # Behaviour action server
         server_name = self.get_parameter("bhv_server_name").value
