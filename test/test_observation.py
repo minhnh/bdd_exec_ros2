@@ -26,7 +26,7 @@ from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 from rdflib import URIRef
-from vision_msgs.msg import Detection3D
+from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
 from bdd_exec_ros2.executables.mockup_behaviour_node import (
@@ -37,8 +37,9 @@ from bdd_exec_ros2.executables.mockup_behaviour_node import (
 from bdd_exec_ros2.observation import (
     TargetsDoNotCollideEvaluator,
     collision_stamp,
-    detection3d_stamp,
+    detection3d_or_array_stamp,
     latest_identified_pose_stamp,
+    map_detection3d_array_by_uri,
     map_detection3d_entity_by_dict,
     map_identified_pose_batch,
 )
@@ -53,13 +54,43 @@ def test_detection3d_adapter_extracts_stamp_and_mapped_position():
 
     mapped = map_detection3d_entity_mockup(detection)
 
-    assert detection3d_stamp(detection, 99.0) == 3.5
+    assert detection3d_or_array_stamp(detection, 99.0) == 3.5
     assert mapped[0].entity_uri == MOCKUP_DETECTION3D_ENTITY_URIS[detection.id]
     assert mapped[0].value == (0.2, 0.0, 0.0)
     detection.id = "unmapped"
     assert (
         map_detection3d_entity_by_dict(detection, MOCKUP_DETECTION3D_ENTITY_URIS) == []
     )
+
+
+def test_detection3d_array_adapter_maps_target_uris_and_result_poses():
+    target = URIRef("urn:test:target")
+    detections = Detection3DArray()
+    detections.header.stamp.sec = 3
+    detections.header.stamp.nanosec = 500_000_000
+
+    for entity_id, x, with_result in (
+        (str(target), 1.0, True),
+        ("urn:test:unrelated", 2.0, True),
+        ("", 3.0, True),
+        (str(target), 4.0, False),
+    ):
+        detection = Detection3D(id=entity_id)
+        detection.bbox.center.position.x = 99.0
+        if with_result:
+            result = ObjectHypothesisWithPose()
+            result.pose.pose.position.x = x
+            detection.results.append(result)
+        detections.detections.append(detection)
+
+    mapped = map_detection3d_array_by_uri(detections, targets=[target])
+
+    assert detection3d_or_array_stamp(detections, 42.0) == 3.5
+    assert [(item.entity_uri, item.value) for item in mapped] == [
+        (target, (1.0, 0.0, 0.0))
+    ]
+    detections.header.stamp = Time().to_msg()
+    assert detection3d_or_array_stamp(detections, 42.0) == 42.0
 
 
 def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():

@@ -12,6 +12,7 @@ distrib (ns=scene_lab_isaac) object-orientation { uniform-rotation }
 scene inst (ns=scene_lab_isaac) pickplace_scene_mjc {
     scene: <pickplace_scene>
     kgraph (ns=scene_lab_isaac) pickplace_graph {
+        anchor: <world.root>
         body world { frame root { } }
         body table {
             frame legs {
