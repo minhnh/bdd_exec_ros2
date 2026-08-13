@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Mapping
+from math import hypot
 
 from bdd_dsl.models.observation import (
     EntityObservation,
@@ -26,13 +27,14 @@ from bdd_dsl.models.urirefs import (
     URI_ROS_TYPE_TOPIC,
 )
 from bdd_ros2_interfaces.msg import Collision
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.time import Time
 from rdf_utils.models.common import ModelBase
 from rdflib import Graph, Literal, URIRef
 from rosidl_runtime_py.utilities import get_action, get_message
 from scene_dsl.rdf_parser.kinematics import get_kinematic_mappings
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
+from std_msgs.msg import Header
 from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
@@ -84,10 +86,13 @@ def map_detection3d_entity_by_dict(
     return [EntityObservation(entity_uri, (position.x, position.y, position.z))]
 
 
-def detection3d_or_array_stamp(
-    observation: Detection3D | Detection3DArray, receipt_stamp: float
-) -> float:
-    stamp = ros_time_to_stamp(Time.from_msg(observation.header.stamp))
+def header_stamp(observation: object, receipt_stamp: float) -> float:
+    header = getattr(observation, "header", None)
+    if not isinstance(header, Header):
+        raise TypeError(
+            f"header_stamp expects a ROS message with a std_msgs/Header, got: {observation}"
+        )
+    stamp = ros_time_to_stamp(Time.from_msg(header.stamp))
     return stamp or receipt_stamp
 
 
@@ -191,3 +196,26 @@ class TargetsDoNotCollideEvaluator(ObservationPolicyEvaluator):
         if not affected_bodies:
             return True, "no active collision for any target"
         return True, "collision does not affect all targets"
+
+
+class WrenchForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
+    def __init__(self, max_force_n: float = 15.0) -> None:
+        super().__init__()
+        self.max_force_n = max_force_n
+
+    def _evaluate_samples(
+        self, observations: list[ObservationStamped]
+    ) -> tuple[bool, str]:
+        if len(observations) != 1:
+            raise ValueError("wrench evaluator expects exactly one observation")
+        message = observations[0].value
+        if not isinstance(message, WrenchStamped):
+            raise TypeError("wrench evaluator expects a WrenchStamped value")
+        force = message.wrench.force
+        norm = hypot(force.x, force.y, force.z)
+        within_limit = norm <= self.max_force_n
+        relation = "within" if within_limit else "exceeds"
+        return (
+            within_limit,
+            f"force norm {norm:.3f} N {relation} {self.max_force_n:.3f} N limit",
+        )
