@@ -15,6 +15,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from bdd_dsl.models.observation import ObservationStamped
 from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_AGN,
@@ -23,7 +24,7 @@ from bdd_dsl.models.urirefs import (
     URI_BHV_TYPE_PLACE,
 )
 from bdd_ros2_interfaces.msg import Collision
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.time import Time
 from rdflib import URIRef
 from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
@@ -36,8 +37,9 @@ from bdd_exec_ros2.executables.mockup_behaviour_node import (
 )
 from bdd_exec_ros2.observation import (
     TargetsDoNotCollideEvaluator,
+    WrenchForceNormWithinLimitEvaluator,
     collision_stamp,
-    detection3d_or_array_stamp,
+    header_stamp,
     latest_identified_pose_stamp,
     map_detection3d_array_by_uri,
     map_detection3d_entity_by_dict,
@@ -54,7 +56,7 @@ def test_detection3d_adapter_extracts_stamp_and_mapped_position():
 
     mapped = map_detection3d_entity_mockup(detection)
 
-    assert detection3d_or_array_stamp(detection, 99.0) == 3.5
+    assert header_stamp(detection, 99.0) == 3.5
     assert mapped[0].entity_uri == MOCKUP_DETECTION3D_ENTITY_URIS[detection.id]
     assert mapped[0].value == (0.2, 0.0, 0.0)
     detection.id = "unmapped"
@@ -85,12 +87,55 @@ def test_detection3d_array_adapter_maps_target_uris_and_result_poses():
 
     mapped = map_detection3d_array_by_uri(detections, targets=[target])
 
-    assert detection3d_or_array_stamp(detections, 42.0) == 3.5
+    assert header_stamp(detections, 42.0) == 3.5
     assert [(item.entity_uri, item.value) for item in mapped] == [
         (target, (1.0, 0.0, 0.0))
     ]
     detections.header.stamp = Time().to_msg()
-    assert detection3d_or_array_stamp(detections, 42.0) == 42.0
+    assert header_stamp(detections, 42.0) == 42.0
+
+
+def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
+    message = WrenchStamped()
+    message.header.stamp.sec = 3
+    message.header.stamp.nanosec = 500_000_000
+    message.wrench.force.x = 3.0
+    message.wrench.force.y = -4.0
+    evaluator = WrenchForceNormWithinLimitEvaluator(max_force_n=5.0)
+    sample = ObservationStamped(
+        URIRef("urn:test:wrench-observation"),
+        URIRef("urn:test:wrench-provider"),
+        3.5,
+        message,
+    )
+
+    assert header_stamp(message, 42.0) == 3.5
+    assert evaluator.evaluate([sample])[0] is True
+
+    message.header.stamp = Time().to_msg()
+    message.wrench.force.x = -6.0
+    message.wrench.force.y = -8.0
+    result, reason = evaluator.evaluate([sample])
+    assert header_stamp(message, 42.0) == 42.0
+    assert result is False
+    assert "10.000 N" in reason and "5.000 N limit" in reason
+    assert evaluator.evaluate([]) == evaluator.default_result
+
+    with pytest.raises(ValueError, match="exactly one"):
+        evaluator.evaluate([sample, sample])
+    with pytest.raises(TypeError, match="WrenchStamped"):
+        evaluator.evaluate(
+            [
+                ObservationStamped(
+                    sample.observation_uri,
+                    sample.provider_uri,
+                    sample.stamp,
+                    object(),
+                )
+            ]
+        )
+    with pytest.raises(TypeError, match="std_msgs/Header"):
+        header_stamp(object(), 42.0)
 
 
 def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():

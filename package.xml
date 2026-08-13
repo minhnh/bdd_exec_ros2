@@ -10,6 +10,8 @@
   <depend>rclpy</depend>
   <depend>bdd_ros2_interfaces</depend>
   <depend>simulation_interfaces</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>vision_msgs</depend>
   <depend>ament_index_python</depend>
   <depend>python3-numpy</depend>
