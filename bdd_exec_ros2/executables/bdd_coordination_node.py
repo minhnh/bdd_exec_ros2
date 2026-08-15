@@ -63,6 +63,7 @@ from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.time import Time
 from rdf_utils.models.common import ModelBase
+from rdf_utils.uri import try_expand_curie
 from rdflib import Graph, URIRef
 from rdflib.namespace import NamespaceManager
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
@@ -391,9 +392,14 @@ class BddCoordNode(Node):
 
         for obs_manager, provider_uri in routes:
             with self._scr_lock:
-                obs_manager.update_provider_observation(
+                _ = obs_manager.update_provider_observation(
                     provider_uri, msg, receipt_stamp
                 )
+                # for policy_uri, (updated, reason) in results.items():
+                #     if not updated:
+                #         self.get_logger().warning(
+                #             f"Observation for policy '{policy_uri.n3(self._ns_manager)}' not added: {reason}"
+                #         )
 
     def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
         with self._scr_lock:
@@ -823,7 +829,12 @@ class BddCoordNode(Node):
         forward_to_all = _is_context_id_uninitialized(msg.scenario_context_id)
         evt_ctx_uuid = from_uuid_msg(msg.scenario_context_id)
         with self._scr_lock:
-            evt_rep = f"{self._ns_manager.curie(msg.uri)} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
+            evt_rep = try_expand_curie(
+                ns_manager=self._ns_manager, curie_str=msg.uri, quiet=True
+            )
+            if evt_rep is None:
+                evt_rep = f"<{msg.uri}>"
+            evt_rep = f"{evt_rep} ({format_time_msg(msg=msg.stamp, use_sim_time=self._use_sim_time)})"
             self.get_logger().info(f"received event [{evt_rep}]")
 
             if forward_to_all:
