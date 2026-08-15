@@ -107,13 +107,11 @@ def map_detection3d_array_by_uri(
     mapped = []
     for detection in observation.detections:
         entity_uri = URIRef(detection.id) if detection.id else None
-        if (
-            entity_uri is None
-            or not detection.results
-            or (target_set is not None and entity_uri not in target_set)
+        if entity_uri is None or (
+            target_set is not None and entity_uri not in target_set
         ):
             continue
-        position = detection.results[0].pose.pose.position
+        position = detection.bbox.center.position
         mapped.append(
             EntityObservation(entity_uri, (position.x, position.y, position.z))
         )

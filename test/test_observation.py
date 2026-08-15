@@ -27,7 +27,7 @@ from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.time import Time
 from rdflib import URIRef
-from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
+from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
 from bdd_exec_ros2.executables.mockup_behaviour_node import (
@@ -65,24 +65,19 @@ def test_detection3d_adapter_extracts_stamp_and_mapped_position():
     )
 
 
-def test_detection3d_array_adapter_maps_target_uris_and_result_poses():
+def test_detection3d_array_adapter_maps_target_uris_and_bbox_centers():
     target = URIRef("urn:test:target")
     detections = Detection3DArray()
     detections.header.stamp.sec = 3
     detections.header.stamp.nanosec = 500_000_000
 
-    for entity_id, x, with_result in (
-        (str(target), 1.0, True),
-        ("urn:test:unrelated", 2.0, True),
-        ("", 3.0, True),
-        (str(target), 4.0, False),
+    for entity_id, x in (
+        (str(target), 1.0),
+        ("urn:test:unrelated", 2.0),
+        ("", 3.0),
     ):
         detection = Detection3D(id=entity_id)
-        detection.bbox.center.position.x = 99.0
-        if with_result:
-            result = ObjectHypothesisWithPose()
-            result.pose.pose.position.x = x
-            detection.results.append(result)
+        detection.bbox.center.position.x = x
         detections.detections.append(detection)
 
     mapped = map_detection3d_array_by_uri(detections, targets=[target])
