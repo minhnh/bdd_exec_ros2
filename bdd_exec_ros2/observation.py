@@ -20,16 +20,16 @@ from bdd_dsl.models.observation import (
     ObservationPolicyEvaluator,
     ObservationStamped,
 )
-from bdd_dsl.models.urirefs import (
+from bdd_ros2_interfaces.msg import Collision
+from geometry_msgs.msg import PoseStamped, WrenchStamped
+from rclpy.time import Time
+from rdf_utils.models.common import ModelBase
+from rdf_utils.models.vocab import (
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_PRED_TYPE_NAME,
     URI_ROS_TYPE_ACTION,
     URI_ROS_TYPE_TOPIC,
 )
-from bdd_ros2_interfaces.msg import Collision
-from geometry_msgs.msg import PoseStamped, WrenchStamped
-from rclpy.time import Time
-from rdf_utils.models.common import ModelBase
 from rdflib import Graph, Literal, URIRef
 from rosidl_runtime_py.utilities import get_action, get_message
 from scene_dsl.rdf_parser.kinematics import get_kinematic_mappings

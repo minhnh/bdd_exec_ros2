@@ -18,10 +18,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
-from bdd_dsl.models.urirefs import URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER
 from bdd_ros2_interfaces.msg import ScenarioStatus
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
+from rdf_utils.models.vocab import URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER
 from rdflib import Graph, URIRef
 
 from bdd_exec_ros2.conversions import TRINARY_NAMES, ros_time_to_stamp

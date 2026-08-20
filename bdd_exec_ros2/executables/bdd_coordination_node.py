@@ -25,12 +25,6 @@ from bdd_dsl.models.observation import (
     ObservationManager,
     trin_policy_and,
 )
-from bdd_dsl.models.urirefs import (
-    URI_ROS_PRED_CHNL_NAME,
-    URI_ROS_PRED_TYPE_NAME,
-    URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER,
-    URI_ROS_TYPE_TOPIC,
-)
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
 from bdd_dsl.models.variation import (
     collect_variable_scene_elements,
@@ -63,6 +57,12 @@ from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.time import Time
 from rdf_utils.models.common import ModelBase
+from rdf_utils.models.vocab import (
+    URI_ROS_PRED_CHNL_NAME,
+    URI_ROS_PRED_TYPE_NAME,
+    URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER,
+    URI_ROS_TYPE_TOPIC,
+)
 from rdf_utils.uri import try_expand_curie
 from rdflib import Graph, URIRef
 from rdflib.namespace import NamespaceManager
