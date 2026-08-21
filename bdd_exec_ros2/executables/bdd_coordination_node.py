@@ -23,6 +23,7 @@ import rclpy
 from ament_index_python import get_package_share_directory
 from bdd_dsl.models.observation import (
     ObservationManager,
+    TrinaryStamped,
     trin_policy_and,
 )
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
@@ -46,7 +47,9 @@ from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
     Event,
     ScenarioStatusList,
-    TrinaryStamped,
+)
+from bdd_ros2_interfaces.msg import (
+    TrinaryStamped as TrinaryStampedMsg,
 )
 from geometry_msgs.msg import PoseStamped
 from rclpy.action.client import ActionClient, ClientGoalHandle
@@ -401,7 +404,7 @@ class BddCoordNode(Node):
                 #             f"Observation for policy '{policy_uri.n3(self._ns_manager)}' not added: {reason}"
                 #         )
 
-    def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
+    def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStampedMsg):
         with self._scr_lock:
             if topic_name not in self._topic_fpolicy_reg:
                 self.get_logger().error(f"no policy registered for topic: {topic_name}")
@@ -463,7 +466,7 @@ class BddCoordNode(Node):
         assert isinstance(topic_name, str) and msg_type is not None, (
             f"invalid attrs for {model.id}: topic={topic_name}, msg_type={msg_type}"
         )
-        assert issubclass(msg_type, TrinaryStamped), (
+        assert issubclass(msg_type, TrinaryStampedMsg), (
             "currently only support TrinaryStamped policy assertions"
         )
 
@@ -872,6 +875,13 @@ class BddCoordNode(Node):
             if not goal_handle.accepted:
                 self.get_logger().error(
                     f"Goal rejected for {context_id}, ending scenario"
+                )
+                ctx.obs_manager.update_bhv_result(
+                    trin_st=TrinaryStamped(
+                        stamp=ros_time_to_stamp(self.get_clock().now()),
+                        trinary=False,
+                        reason="goal rejected",
+                    )
                 )
                 self._send_event(
                     evt_uri=ctx.obs_manager.scenario_exec.end_event, ctx_id=context_id

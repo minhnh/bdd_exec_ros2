@@ -269,6 +269,37 @@ def test_behaviour_result_is_recorded_before_scenario_ends():
     node._send_event.assert_called_once()
 
 
+def test_rejected_behaviour_sets_scenario_false_before_ending():
+    context_id = uuid4()
+    end_event = URIRef("urn:test:end")
+    obs_manager = SimpleNamespace(
+        scenario_exec=SimpleNamespace(end_event=end_event),
+        update_bhv_result=Mock(),
+    )
+    node = _node(
+        _scenario_contexts={context_id: SimpleNamespace(obs_manager=obs_manager)},
+        _scr_lock=threading.Lock(),
+        _send_event=Mock(
+            side_effect=lambda **_: obs_manager.update_bhv_result.assert_called_once()
+        ),
+        get_clock=Mock(
+            return_value=SimpleNamespace(now=Mock(return_value=Time(seconds=7)))
+        ),
+        get_logger=Mock(return_value=Mock()),
+    )
+
+    node.bhv_goal_resp_cb(
+        SimpleNamespace(result=Mock(return_value=SimpleNamespace(accepted=False))),
+        context_id,
+    )
+
+    result = obs_manager.update_bhv_result.call_args.kwargs["trin_st"]
+    assert result.trinary is False
+    assert result.reason == "rejected"
+    assert result.stamp == 7.0
+    node._send_event.assert_called_once_with(evt_uri=end_event, ctx_id=context_id)
+
+
 def test_topic_observation_forwards_raw_message_with_receipt_stamp():
     provider_uri = URIRef("urn:test:provider")
     context_id = uuid4()
