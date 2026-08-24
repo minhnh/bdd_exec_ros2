@@ -131,6 +131,8 @@ def create_spawn_entity_entries(
             continue
 
         resource, mapping, root = resolved
+        if resource.id in scene_inst.models:
+            continue
         sim_entity = mapping.entity
         if sim_entity is None:
             sim_entity = get_valid_var_name(elem_id.n3(ns_manager))
