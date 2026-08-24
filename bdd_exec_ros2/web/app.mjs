@@ -102,7 +102,10 @@ function svg(name, attributes = {}, text = "") {
 function selectable(element, record) {
   element.setAttribute("tabindex", "0");
   element.setAttribute("role", "button");
-  element.setAttribute("aria-label", record.kind + " " + (record.label || ""));
+  element.setAttribute(
+    "aria-label",
+    record.kind + " " + (record.label || "") + (record.discarded ? " discarded" : ""),
+  );
   const select = () => {
     selectedRecord = record;
     selectedTime = recordSeconds(record);
@@ -130,6 +133,9 @@ function drawTrinary(root, record, x, y) {
         x + "," + (y + 7) + " " + (x - 7) + "," + y,
     }));
   }
+  if (record.discarded) {
+    group.append(svg("circle", { class: "discarded-ring", cx: x, cy: y, r: 10 }));
+  }
   selectable(group, record);
   root.append(group);
 }
@@ -139,7 +145,7 @@ function renderDetails() {
   detailsEmpty.hidden = Boolean(selectedRecord);
   if (!selectedRecord) return;
   for (const [key, value] of Object.entries(selectedRecord)) {
-    if (key === "discarded") continue;
+    if (key === "discarded" && !value) continue;
     const term = document.createElement("dt");
     term.textContent = key.replaceAll("_", " ");
     const description = document.createElement("dd");
@@ -321,7 +327,9 @@ function render() {
         root.append(element);
       }
     } else {
-      for (const record of lane.records) {
+      for (const record of lane.records.filter(
+        (record) => record.role === "assertion",
+      )) {
         drawTrinary(root, record, x(recordSeconds(record)), y);
       }
     }

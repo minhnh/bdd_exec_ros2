@@ -210,7 +210,13 @@ svg {
 .marker.true { fill: var(--true); stroke: var(--true); }
 .marker.false { stroke: var(--false); }
 .marker.unknown { fill: var(--unknown); stroke: var(--unknown); }
-.marker.discarded { opacity: .32; }
+.marker.discarded > :not(.discarded-ring) { opacity: .32; }
+.marker .discarded-ring {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
 
 .details-panel {
   padding: 1rem;

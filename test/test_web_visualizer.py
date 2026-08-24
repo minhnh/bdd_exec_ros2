@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 from uuid import UUID
 
+from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
 from bdd_ros2_interfaces.msg import (
     Event,
     FluentStatus,
@@ -27,6 +30,7 @@ from builtin_interfaces.msg import Time
 from bdd_exec_ros2.conversions import to_uuid_msg
 from bdd_exec_ros2.executables.web_visualizer import (
     TimelineStore,
+    _no_store_ui,
     event_dict,
     status_dict,
 )
@@ -108,3 +112,19 @@ def test_events_remain_context_scoped_and_are_deduplicated():
     assert event_dict(message)["context_id"] == str(CONTEXT_ID)
     assert len(store.records) == 1
     assert store.records[0]["label"] == message.uri
+
+
+def test_ui_assets_are_not_cached():
+    async def check() -> None:
+        async def handler(_: web.Request) -> web.StreamResponse:
+            return web.Response()
+
+        asset = await _no_store_ui(
+            make_mocked_request("GET", "/assets/app.mjs"), handler
+        )
+        health = await _no_store_ui(make_mocked_request("GET", "/healthz"), handler)
+
+        assert asset.headers["Cache-Control"] == "no-store"
+        assert "Cache-Control" not in health.headers
+
+    asyncio.run(check())
