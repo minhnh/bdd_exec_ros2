@@ -16,7 +16,8 @@ A GUI tool is also available for visualizing test results.
   [`simulation_interfaces`](https://github.com/ros-simulation/simulation_interfaces),
   [`bdd_ros2_interfaces`](https://github.com/minhnh/bdd_ros2_interfaces),
   `builtin_interfaces`, `geometry_msgs`, `std_msgs`, and `unique_identifier_msgs`.
-- The visualizer requires [PySide6](https://pypi.org/project/PySide6/).
+- The desktop visualizer requires [PySide6](https://pypi.org/project/PySide6/), while the web
+  visualizer requires [aiohttp](https://docs.aiohttp.org/).
 
 ## Quick start
 
@@ -34,7 +35,13 @@ To run the mockup setup:
    ros2 launch bdd_exec_ros2 launch_mockup.yaml
    ```
 
-1. (Optional) Run the visualizer:
+1. (Optional) Run the web visualizer and open <http://127.0.0.1:8080>:
+
+    ```bash
+    ros2 run bdd_exec_ros2 web_visualizer
+    ```
+
+    The existing desktop visualizer remains available with:
 
     ```bash
     ros2 run bdd_exec_ros2 visualizer
@@ -114,14 +121,19 @@ not named `world`.
 
 ### Test Result Visualizer
 
-The [`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) script visualizes trinaries and
-clause assertions for each executed scenario variation, including their result reasons. The RobBDD
+The [`web_visualizer.py`](./bdd_exec_ros2/executables/web_visualizer.py) script serves a seekable
+timeline at <http://127.0.0.1:8080>. It groups events, scenarios, behaviours, and observation-policy
+trinaries into lanes and exposes their details without a JavaScript framework. Use `--host`,
+`--port`, `--topic`, or `--event-topic` to override its defaults. The original
+[`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) desktop UI remains available.
+
+The RobBDD
 mockup model includes a no-collision policy. Run it with `simulate_collision:=true` to see the
 policy fail and its affected bodies reported in the visualizer:
 
 ```bash
 ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml simulate_collision:=true
-ros2 run bdd_exec_ros2 visualizer
+ros2 run bdd_exec_ros2 web_visualizer
 ros2 topic pub /bdd/start std_msgs/msg/Empty "{}" -1
 ```
 

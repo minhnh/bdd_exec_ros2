@@ -23,9 +23,10 @@ setup(
             glob(os_join("models", "robbdd", "*.*")),
         ),
     ],
-    package_data={"": ["py.typed"]},
+    package_data={package_name: ["py.typed", "web/*"]},
     install_requires=[
         "setuptools",
+        "aiohttp",
         "pyside6",
         "numpy",
         "scipy>=1.16",
@@ -51,6 +52,7 @@ setup(
             "sim_interface_test = bdd_exec_ros2.executables.sim_interface_test:main",
             "mockup_behaviour_node = bdd_exec_ros2.executables.mockup_behaviour_node:main",
             "visualizer = bdd_exec_ros2.executables.visualizer:main",
+            "web_visualizer = bdd_exec_ros2.executables.web_visualizer:main",
         ],
     },
 )
