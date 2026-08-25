@@ -24,7 +24,7 @@ from typing import Any
 
 import rclpy
 from aiohttp import WSMsgType, web
-from bdd_ros2_interfaces.msg import Event, ScenarioStatusList, Trinary
+from bdd_ros2_interfaces.msg import ScenarioStatusList, Trinary
 from builtin_interfaces.msg import Time
 from rclpy.executors import ExternalShutdownException
 
@@ -69,6 +69,14 @@ def status_dict(msg: ScenarioStatusList) -> dict[str, Any]:
                     "representation": scenario.behaviour.representation,
                     "result": trinary_dict(scenario.behaviour.result),
                 },
+                "events": [
+                    {
+                        "context_id": str(from_uuid_msg(event.scenario_context_id)),
+                        "stamp": time_dict(event.stamp),
+                        "uri": event.uri,
+                    }
+                    for event in scenario.events
+                ],
                 "fluents": [
                     {
                         "representation": fluent.representation,
@@ -82,14 +90,6 @@ def status_dict(msg: ScenarioStatusList) -> dict[str, Any]:
             }
             for scenario in msg.scenarios
         ],
-    }
-
-
-def event_dict(msg: Event) -> dict[str, Any]:
-    return {
-        "context_id": str(from_uuid_msg(msg.scenario_context_id)),
-        "stamp": time_dict(msg.stamp),
-        "uri": msg.uri,
     }
 
 
@@ -143,6 +143,15 @@ class TimelineStore:
                     context_id=context_id,
                     stamp=time_dict(scenario.start_time),
                     label=scenario.representation,
+                )
+            for event in scenario.events:
+                self._add(
+                    ("event", context_id, event.uri, _time_key(event.stamp)),
+                    new_records,
+                    kind="event",
+                    context_id=context_id,
+                    stamp=time_dict(event.stamp),
+                    label=event.uri,
                 )
 
             self._add_trinary(
@@ -204,20 +213,6 @@ class TimelineStore:
 
         self._publish(self._snapshot_message())
         for record in new_records:
-            self._publish({"type": "timeline_record", "record": record})
-
-    def ingest_event(self, msg: Event) -> None:
-        data = event_dict(msg)
-        new_records: list[dict[str, Any]] = []
-        record = self._add(
-            ("event", data["context_id"], data["uri"], _time_key(msg.stamp)),
-            new_records,
-            kind="event",
-            context_id=data["context_id"],
-            stamp=data["stamp"],
-            label=data["uri"],
-        )
-        if record is not None:
             self._publish({"type": "timeline_record", "record": record})
 
     def _add_trinary(
@@ -360,24 +355,13 @@ async def _start_ros(app: web.Application) -> None:
     def ingest_status(msg: ScenarioStatusList) -> None:
         loop.call_soon_threadsafe(store.ingest_status, msg)
 
-    def ingest_event(msg: Event) -> None:
-        loop.call_soon_threadsafe(store.ingest_event, msg)
-
     node.create_subscription(
         ScenarioStatusList,
         app["status_topic"],
         ingest_status,
         10,
     )
-    node.create_subscription(
-        Event,
-        app["event_topic"],
-        ingest_event,
-        10,
-    )
-    node.get_logger().info(
-        f"Web visualizer subscribing to {app['status_topic']} and {app['event_topic']}"
-    )
+    node.get_logger().info(f"Web visualizer subscribing to {app['status_topic']}")
     thread = threading.Thread(target=_spin, args=(node,), daemon=True)
     thread.start()
     app["ros_node"] = node
@@ -397,13 +381,11 @@ async def _stop_ros(app: web.Application) -> None:
 
 def create_app(
     status_topic: str = "/bdd/status",
-    event_topic: str = "/bdd/events",
     ros_args: list[str] | None = None,
 ) -> web.Application:
     app = web.Application(middlewares=[_revalidate_ui])
     app["store"] = TimelineStore()
     app["status_topic"] = status_topic
-    app["event_topic"] = event_topic
     app["ros_args"] = ros_args
     app.router.add_get("/", _index)
     app.router.add_get("/healthz", _health)
@@ -421,12 +403,11 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--topic", default="/bdd/status")
-    parser.add_argument("--event-topic", default="/bdd/events")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8080, type=int)
     args, ros_args = parser.parse_known_args()
     web.run_app(
-        create_app(args.topic, args.event_topic, ros_args),
+        create_app(status_topic=args.topic, ros_args=ros_args),
         host=args.host,
         port=args.port,
         print=lambda _: print(f"BDD timeline: http://{args.host}:{args.port}"),

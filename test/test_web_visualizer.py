@@ -29,6 +29,7 @@ from bdd_ros2_interfaces.msg import (
 )
 from builtin_interfaces.msg import Time
 from rclpy.time import Time as RclpyTime
+from rdflib import URIRef
 from trinary import Unknown
 
 from bdd_exec_ros2.conversions import to_scenario_status_msg, to_uuid_msg
@@ -36,7 +37,6 @@ from bdd_exec_ros2.executables.web_visualizer import (
     TimelineStore,
     _revalidate_ui,
     create_app,
-    event_dict,
     status_dict,
 )
 
@@ -45,6 +45,14 @@ CONTEXT_ID = UUID("01234567-89ab-cdef-0123-456789abcdef")
 
 def stamp(seconds: int) -> Time:
     return Time(sec=seconds)
+
+
+def scenario_event(seconds: int, uri: str = "urn:bdd:event:grasped") -> Event:
+    result = Event()
+    result.scenario_context_id = to_uuid_msg(CONTEXT_ID)
+    result.stamp = stamp(seconds)
+    result.uri = uri
+    return result
 
 
 def assertion(seconds: int, value: int = Trinary.TRUE) -> TrinaryStamped:
@@ -56,7 +64,9 @@ def assertion(seconds: int, value: int = Trinary.TRUE) -> TrinaryStamped:
     return result
 
 
-def status(*trinaries: TrinaryStamped) -> ScenarioStatusList:
+def status(
+    *trinaries: TrinaryStamped, events: tuple[Event, ...] = ()
+) -> ScenarioStatusList:
     fluent = FluentStatus()
     fluent.representation = "the object is held"
     fluent.trinaries = list(trinaries)
@@ -67,6 +77,7 @@ def status(*trinaries: TrinaryStamped) -> ScenarioStatusList:
     scenario.representation = "Pick the object"
     scenario.behaviour.representation = "pick"
     scenario.fluents = [fluent]
+    scenario.events = list(events)
 
     message = ScenarioStatusList()
     message.stamp = stamp(3)
@@ -93,6 +104,7 @@ def test_behaviour_result_stamp_is_unset_until_a_terminal_trinary_exists():
         scr_end_time=None,
         bhv_result=None,
         obs_policies={},
+        event_timelines={},
     )
     representation = SimpleNamespace(
         variant_rep="Pick the object",
@@ -123,6 +135,43 @@ def test_behaviour_result_stamp_is_unset_until_a_terminal_trinary_exists():
         )
         assert terminal.behaviour.result.stamp == Time(sec=2, nanosec=500_000_000)
         assert terminal.behaviour.result.trinary.value == message_value
+
+
+def test_status_conversion_embeds_events():
+    obs_manager = SimpleNamespace(
+        scr_start_time=1.0,
+        scr_end_time=None,
+        bhv_result=None,
+        obs_policies={},
+        event_timelines={
+            URIRef("urn:bdd:event:z"): [3.0, 1.0, 3.0],
+            URIRef("urn:bdd:event:a"): [3.0],
+        },
+    )
+    representation = SimpleNamespace(
+        variant_rep="Pick the object",
+        bhv_rep="pick",
+    )
+
+    result = to_scenario_status_msg(
+        CONTEXT_ID,
+        obs_manager,
+        representation,
+        RclpyTime(seconds=4),
+        lambda _: (Unknown, ""),
+    )
+
+    assert sorted(
+        (event.uri, event.stamp.sec, event.stamp.nanosec) for event in result.events
+    ) == [
+        ("urn:bdd:event:a", 3, 0),
+        ("urn:bdd:event:z", 1, 0),
+        ("urn:bdd:event:z", 3, 0),
+        ("urn:bdd:event:z", 3, 0),
+    ]
+    assert all(
+        event.scenario_context_id == to_uuid_msg(CONTEXT_ID) for event in result.events
+    )
 
 
 def test_behaviour_timeline_ignores_running_placeholder_and_keeps_terminal_unknown():
@@ -158,18 +207,17 @@ def test_timeline_history_is_deduplicated_and_marks_discarded_observations():
 
 
 def test_events_remain_context_scoped_and_are_deduplicated():
-    message = Event()
-    message.scenario_context_id = to_uuid_msg(CONTEXT_ID)
-    message.stamp = stamp(4)
-    message.uri = "urn:bdd:event:grasped"
+    message = status(events=(scenario_event(4),))
     store = TimelineStore()
 
-    store.ingest_event(message)
-    store.ingest_event(message)
+    store.ingest_status(message)
+    store.ingest_status(message)
 
-    assert event_dict(message)["context_id"] == str(CONTEXT_ID)
-    assert len(store.records) == 1
-    assert store.records[0]["label"] == message.uri
+    serialized = status_dict(message)["scenarios"][0]["events"][0]
+    event_records = [record for record in store.records if record["kind"] == "event"]
+    assert serialized["context_id"] == str(CONTEXT_ID)
+    assert len(event_records) == 1
+    assert event_records[0]["label"] == "urn:bdd:event:grasped"
 
 
 def test_ui_assets_are_revalidated():
@@ -189,8 +237,10 @@ def test_ui_assets_are_revalidated():
 
 
 def test_only_runtime_assets_are_served():
-    paths = {resource.canonical for resource in create_app().router.resources()}
+    app = create_app()
+    paths = {resource.canonical for resource in app.router.resources()}
 
+    assert "event_topic" not in app
     assert "/assets/app.mjs" in paths
     assert "/assets/timeline.mjs" in paths
     assert "/assets/styles.css" in paths
