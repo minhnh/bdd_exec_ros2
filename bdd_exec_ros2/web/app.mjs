@@ -1,9 +1,13 @@
 import {
   buildLanes,
   buildScenarios,
-  clauseStateAt,
+  detailEntries,
+  displayKind,
   formatStamp,
+  isTimelineTrinary,
+  laneStateAt,
   recordSeconds,
+  selectContextId,
 } from "./timeline.mjs";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -22,13 +26,13 @@ const details = document.querySelector("#details");
 const detailsEmpty = document.querySelector("#details-empty");
 
 let followLive = true;
-let selectionPinned = false;
 let selectedContextId = null;
 let selectedTime = 0;
 let selectedRecord = null;
 let latestSnapshot = null;
 let latestStamp = null;
 let useSimTime = false;
+let renderFrame = null;
 
 function formatSeconds(value) {
   let sec = Math.floor(value);
@@ -60,6 +64,14 @@ function addRecord(record) {
   records.set(record.id, record);
 }
 
+function scheduleRender() {
+  if (renderFrame !== null) return;
+  renderFrame = requestAnimationFrame(() => {
+    renderFrame = null;
+    render();
+  });
+}
+
 function receive(message) {
   if (message.type === "hello") {
     useSimTime = Boolean(message.use_sim_time);
@@ -75,7 +87,7 @@ function receive(message) {
   } else if (message.type === "timeline_record") {
     addRecord(message.record);
   }
-  render();
+  scheduleRender();
 }
 
 function connect() {
@@ -104,7 +116,7 @@ function selectable(element, record) {
   element.setAttribute("role", "button");
   element.setAttribute(
     "aria-label",
-    record.kind + " " + (record.label || "") + (record.discarded ? " discarded" : ""),
+    displayKind(record) + " " + (record.label || "") + (record.discarded ? " discarded" : ""),
   );
   const select = () => {
     selectedRecord = record;
@@ -144,18 +156,11 @@ function renderDetails() {
   details.replaceChildren();
   detailsEmpty.hidden = Boolean(selectedRecord);
   if (!selectedRecord) return;
-  for (const [key, value] of Object.entries(selectedRecord)) {
-    if (key === "discarded" && !value) continue;
+  for (const [key, value] of detailEntries(selectedRecord, useSimTime)) {
     const term = document.createElement("dt");
-    term.textContent = key.replaceAll("_", " ");
+    term.textContent = key;
     const description = document.createElement("dd");
-    if (key === "stamp") {
-      description.textContent = formatStamp(value, useSimTime) +
-        " · " + value.sec + "s " + value.nanosec + "ns";
-    } else {
-      description.textContent =
-        typeof value === "object" ? JSON.stringify(value) : String(value);
-    }
+    description.textContent = String(value);
     details.append(term, description);
   }
 }
@@ -184,7 +189,6 @@ function renderColumns(scenarios, lanes) {
     button.append(title, context, summary);
     button.addEventListener("click", () => {
       selectedContextId = scenario.contextId;
-      selectionPinned = true;
       selectedRecord = null;
       selectedTime = scenario.endSeconds;
       followLive = true;
@@ -202,10 +206,10 @@ function renderColumns(scenarios, lanes) {
     text.textContent = lane.label;
     item.append(text);
     if (lane.type === "trinary") {
-      const result = clauseStateAt(lane, selectedTime);
+      const value = laneStateAt(lane, selectedTime);
       const status = document.createElement("span");
-      status.className = "status " + (result?.value || "pending");
-      status.textContent = result?.value || "not evaluated";
+      status.className = "status " + value;
+      status.textContent = value === "pending" ? "not evaluated" : value;
       item.append(status);
     }
     laneLabels.append(item);
@@ -215,13 +219,7 @@ function renderColumns(scenarios, lanes) {
 function render() {
   const all = [...records.values()];
   const scenarios = buildScenarios(all, latestStamp);
-  const newest = scenarios.at(-1);
-  if (!scenarios.some((scenario) => scenario.contextId === selectedContextId)) {
-    selectedContextId = newest?.contextId || null;
-    selectionPinned = false;
-  } else if (!selectionPinned && newest) {
-    selectedContextId = newest.contextId;
-  }
+  selectedContextId = selectContextId(scenarios, selectedContextId);
 
   const scenario = scenarios.find((item) => item.contextId === selectedContextId);
   timeline.replaceChildren();
@@ -327,9 +325,7 @@ function render() {
         root.append(element);
       }
     } else {
-      for (const record of lane.records.filter(
-        (record) => record.role === "assertion",
-      )) {
+      for (const record of lane.records.filter(isTimelineTrinary)) {
         drawTrinary(root, record, x(recordSeconds(record)), y);
       }
     }
@@ -360,7 +356,8 @@ function render() {
   playheadInput.dataset.start = String(minimum);
   playheadInput.disabled = duration === 0;
   playheadTime.value =
-    formatDuration(selectedTime - minimum) + " · ROS " + formatSeconds(selectedTime);
+    formatDuration(selectedTime - minimum) + " · " +
+    (useSimTime ? "Sim time " : "") + formatSeconds(selectedTime);
   followButton.textContent = followLive
     ? (scenario.finished ? "At end" : "Pause")
     : "Go to end";
@@ -382,7 +379,6 @@ playheadInput.addEventListener("input", () => {
 document.querySelector("#clear").addEventListener("click", () => {
   records.clear();
   selectedContextId = null;
-  selectionPinned = false;
   selectedRecord = null;
   latestSnapshot = null;
   latestStamp = null;

@@ -5,8 +5,12 @@ import {
   buildLanes,
   buildScenarios,
   clauseStateAt,
+  detailEntries,
   formatStamp,
+  isTimelineTrinary,
+  laneStateAt,
   materializeRecords,
+  selectContextId,
   timeExtent,
 } from "./timeline.mjs";
 
@@ -63,6 +67,10 @@ test("keeps scenario clocks independent and freezes completed scenarios", () => 
       { startSeconds: 25, endSeconds: 25, finished: true },
     ],
   );
+  assert.equal(selectContextId(scenarios, null), "a");
+  assert.equal(selectContextId(scenarios, "b"), "b");
+  assert.equal(selectContextId(scenarios, "missing"), "a");
+  assert.equal(selectContextId([], null), null);
 });
 
 test("derives clause result at the playhead using sequence order", () => {
@@ -81,6 +89,61 @@ test("derives clause result at the playhead using sequence order", () => {
 test("formats wall and simulation timestamps like the desktop visualizer", () => {
   assert.equal(formatStamp({ sec: 0, nanosec: 123456789 }), "1970-01-01 00:00:00.123 UTC");
   assert.equal(formatStamp({ sec: 3661, nanosec: 123456789 }, true), "01:01:01.123");
+});
+
+test("shows a running behaviour until its terminal trinary stamp", () => {
+  const lane = {
+    laneType: "behaviour",
+    records: [
+      { role: "result", value: "unknown", stamp: stamp(12) },
+    ],
+  };
+
+  assert.equal(laneStateAt(lane, 11), "running");
+  assert.equal(laneStateAt(lane, 12), "unknown");
+  assert.equal(laneStateAt({ laneType: "policy", records: [] }, 12), "pending");
+});
+
+test("plots raw fluent and behaviour trinaries but not interpreted fluent results", () => {
+  assert.equal(isTimelineTrinary({
+    kind: "trinary", lane_type: "policy", role: "assertion",
+  }), true);
+  assert.equal(isTimelineTrinary({
+    kind: "trinary", lane_type: "behaviour", role: "result",
+  }), true);
+  assert.equal(isTimelineTrinary({
+    kind: "trinary", lane_type: "policy", role: "result",
+  }), false);
+});
+
+test("projects timeline records into concise user-facing details", () => {
+  const record = {
+    id: "r1",
+    sequence: 1,
+    kind: "trinary",
+    context_id: "ctx",
+    lane_type: "behaviour",
+    role: "result",
+    stamp: { sec: 3661, nanosec: 123456789 },
+    label: "Move arm",
+    value: "true",
+    reason: "completed",
+    discarded: false,
+  };
+
+  assert.deepEqual(detailEntries(record, true), [
+    ["Kind", "Behaviour trinary"],
+    ["Sim time", "01:01:01.123"],
+    ["Label", "Move arm"],
+    ["Value", "true"],
+    ["Reason", "completed"],
+  ]);
+  assert.equal(
+    detailEntries({ ...record, lane_type: "policy" })[0][1],
+    "Fluent trinary",
+  );
+  assert.equal(detailEntries({ ...record, kind: "event" })[0][1], "Event");
+  assert.equal(detailEntries({ ...record, kind: "scenario_end" })[0][1], "Scenario");
 });
 
 test("marks discarded trinaries without removing their history", () => {

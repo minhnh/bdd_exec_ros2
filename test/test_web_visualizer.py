@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import asyncio
+from types import SimpleNamespace
 from uuid import UUID
 
 from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
+from bdd_dsl.models.observation import TrinaryStamped as DslTrinaryStamped
 from bdd_ros2_interfaces.msg import (
     Event,
     FluentStatus,
@@ -26,8 +28,10 @@ from bdd_ros2_interfaces.msg import (
     TrinaryStamped,
 )
 from builtin_interfaces.msg import Time
+from rclpy.time import Time as RclpyTime
+from trinary import Unknown
 
-from bdd_exec_ros2.conversions import to_uuid_msg
+from bdd_exec_ros2.conversions import to_scenario_status_msg, to_uuid_msg
 from bdd_exec_ros2.executables.web_visualizer import (
     TimelineStore,
     _no_store_ui,
@@ -80,6 +84,59 @@ def test_ros_messages_are_serialized_to_the_browser_contract():
     assert scenario["start_time"] == {"sec": 1, "nanosec": 0}
     assert observed["value"] == "false"
     assert observed["reason"] == "observed"
+
+
+def test_behaviour_result_stamp_is_unset_until_a_terminal_trinary_exists():
+    obs_manager = SimpleNamespace(
+        scr_start_time=1.0,
+        scr_end_time=None,
+        bhv_result=None,
+        obs_policies={},
+    )
+    representation = SimpleNamespace(
+        variant_rep="Pick the object",
+        bhv_rep="pick",
+    )
+
+    def policy(_):
+        return Unknown, ""
+
+    running = to_scenario_status_msg(
+        CONTEXT_ID, obs_manager, representation, RclpyTime(seconds=2), policy
+    )
+    assert running.behaviour.result.stamp == Time()
+
+    expected = (
+        (True, Trinary.TRUE),
+        (False, Trinary.FALSE),
+        (Unknown, Trinary.UNKNOWN),
+    )
+    for value, message_value in expected:
+        obs_manager.bhv_result = DslTrinaryStamped(
+            stamp=2.5,
+            trinary=value,
+            reason="finished",
+        )
+        terminal = to_scenario_status_msg(
+            CONTEXT_ID, obs_manager, representation, RclpyTime(seconds=3), policy
+        )
+        assert terminal.behaviour.result.stamp == Time(sec=2, nanosec=500_000_000)
+        assert terminal.behaviour.result.trinary.value == message_value
+
+
+def test_behaviour_timeline_ignores_running_placeholder_and_keeps_terminal_unknown():
+    store = TimelineStore()
+    store.ingest_status(status())
+    terminal = status()
+    terminal.scenarios[0].behaviour.result = assertion(4, Trinary.UNKNOWN)
+    store.ingest_status(terminal)
+
+    behaviour = [
+        record for record in store.records if record.get("lane_type") == "behaviour"
+    ]
+    assert [(record["value"], record["stamp"]) for record in behaviour] == [
+        ("unknown", {"sec": 4, "nanosec": 0})
+    ]
 
 
 def test_timeline_history_is_deduplicated_and_marks_discarded_observations():

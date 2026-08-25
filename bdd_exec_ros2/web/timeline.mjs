@@ -64,10 +64,45 @@ export function buildScenarios(input, currentStamp = null) {
     });
 }
 
+export function selectContextId(scenarios, currentContextId) {
+  return scenarios.some((scenario) => scenario.contextId === currentContextId)
+    ? currentContextId : scenarios[0]?.contextId || null;
+}
+
 export function clauseStateAt(lane, seconds) {
   return lane.records.findLast(
     (record) => record.role === "result" && recordSeconds(record) <= seconds,
   ) || null;
+}
+
+export function laneStateAt(lane, seconds) {
+  return clauseStateAt(lane, seconds)?.value ||
+    (lane.laneType === "behaviour" ? "running" : "pending");
+}
+
+export function isTimelineTrinary(record) {
+  return record.kind === "trinary" &&
+    (record.lane_type === "behaviour" || record.role === "assertion");
+}
+
+export function displayKind(record) {
+  if (record.kind === "trinary") {
+    return record.lane_type === "behaviour" ? "Behaviour trinary" : "Fluent trinary";
+  }
+  if (record.kind.startsWith("scenario_")) return "Scenario";
+  if (record.kind === "event") return "Event";
+  return record.kind;
+}
+
+export function detailEntries(record, useSimTime = false) {
+  return [
+    ["Kind", displayKind(record)],
+    [useSimTime ? "Sim time" : "Time", formatStamp(record.stamp, useSimTime)],
+    ["Label", record.label],
+    ["Value", record.value],
+    ["Reason", record.reason],
+    ["Discarded", record.discarded],
+  ].filter(([, value]) => value !== undefined && value !== "" && value !== false);
 }
 
 export function buildLanes(input, contextId, definitions = []) {
@@ -94,6 +129,7 @@ export function buildLanes(input, contextId, definitions = []) {
       children.set(key, {
         id: contextId + ":" + key,
         label,
+        laneType,
         type: "trinary",
         records: [],
       });
