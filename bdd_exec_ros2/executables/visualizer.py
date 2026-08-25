@@ -182,6 +182,13 @@ def update_fluent_item_view(
 def update_bhv_item_view(
     bhv_item: QTreeWidgetItem, bhv_status: BehaviourStatus, use_sim_time: bool = False
 ):
+    if not (bhv_status.result.stamp.sec or bhv_status.result.stamp.nanosec):
+        bhv_item.setText(ColumnIdx.RESULT.value, "RUNNING")
+        bhv_item.setText(ColumnIdx.RESULT_TIME.value, "")
+        bhv_item.setText(ColumnIdx.DETAILS.value, "")
+        bhv_item.setToolTip(ColumnIdx.RESULT.value, "")
+        return
+
     trin_val = bhv_status.result.trinary.value
     txt, color = get_trinary_style(trin_val)
     bhv_item.setText(ColumnIdx.RESULT.value, txt)

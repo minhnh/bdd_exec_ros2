@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BDD Timeline</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">BDD execution</p>
+      <h1>Scenario timeline</h1>
+    </div>
+    <div class="connection">
+      <span id="connection-dot" aria-hidden="true"></span>
+      <span id="connection">Connecting…</span>
+      <span id="last-update"></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="toolbar" aria-label="Timeline controls">
+      <button id="follow" type="button">Pause</button>
+      <label for="playhead">Playhead</label>
+      <input id="playhead" type="range" min="0" max="1" value="1" step="any">
+      <output id="playhead-time" for="playhead">—</output>
+      <button id="clear" type="button">Clear session view</button>
+    </section>
+
+    <div class="workspace">
+      <aside class="scenario-panel" aria-label="Scenario navigation">
+        <h2>Scenario variants</h2>
+        <ul id="scenario-list" class="scenario-list"></ul>
+      </aside>
+
+      <section class="timeline-panel" aria-label="Execution timeline">
+        <p id="empty">Waiting for scenario status or events…</p>
+        <div class="timeline-grid">
+          <ol id="lane-labels" class="lane-labels" aria-label="Timeline lanes"></ol>
+          <div id="timeline"></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="details-panel" aria-labelledby="details-heading">
+      <h2 id="details-heading">Selection</h2>
+      <p id="details-empty">Select an interval or marker for details.</p>
+      <dl id="details"></dl>
+    </section>
+  </main>
+
+  <script type="module" src="/assets/app.mjs"></script>
+</body>
+</html>

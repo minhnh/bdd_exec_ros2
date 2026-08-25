@@ -345,9 +345,7 @@ def to_scenario_status_msg(
     now_stamp = ros_time_to_stamp(now)
 
     scr_status.behaviour.representation = scr_rep.bhv_rep
-    if obs_manager.bhv_result is None:
-        scr_status.behaviour.result.stamp = now_msg
-    else:
+    if obs_manager.bhv_result is not None:
         scr_status.behaviour.result = to_trin_stamped_msg(
             trin_st=obs_manager.bhv_result,
         )

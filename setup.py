@@ -23,9 +23,18 @@ setup(
             glob(os_join("models", "robbdd", "*.*")),
         ),
     ],
-    package_data={"": ["py.typed"]},
+    package_data={
+        package_name: [
+            "py.typed",
+            "web/index.html",
+            "web/styles.css",
+            "web/app.mjs",
+            "web/timeline.mjs",
+        ]
+    },
     install_requires=[
         "setuptools",
+        "aiohttp",
         "pyside6",
         "numpy",
         "scipy>=1.16",
@@ -35,7 +44,7 @@ setup(
         "scene-dsl",
         "robbdd",
     ],
-    zip_safe=True,
+    zip_safe=False,
     maintainer="Minh Nguyen",
     maintainer_email="1168534+minhnh@users.noreply.github.com",
     description="Execution setup for bdd-dsl with ROS2",
@@ -51,6 +60,7 @@ setup(
             "sim_interface_test = bdd_exec_ros2.executables.sim_interface_test:main",
             "mockup_behaviour_node = bdd_exec_ros2.executables.mockup_behaviour_node:main",
             "visualizer = bdd_exec_ros2.executables.visualizer:main",
+            "web_visualizer = bdd_exec_ros2.executables.web_visualizer:main",
         ],
     },
 )
