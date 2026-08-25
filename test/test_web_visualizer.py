@@ -34,7 +34,8 @@ from trinary import Unknown
 from bdd_exec_ros2.conversions import to_scenario_status_msg, to_uuid_msg
 from bdd_exec_ros2.executables.web_visualizer import (
     TimelineStore,
-    _no_store_ui,
+    _revalidate_ui,
+    create_app,
     event_dict,
     status_dict,
 )
@@ -171,17 +172,26 @@ def test_events_remain_context_scoped_and_are_deduplicated():
     assert store.records[0]["label"] == message.uri
 
 
-def test_ui_assets_are_not_cached():
+def test_ui_assets_are_revalidated():
     async def check() -> None:
         async def handler(_: web.Request) -> web.StreamResponse:
             return web.Response()
 
-        asset = await _no_store_ui(
+        asset = await _revalidate_ui(
             make_mocked_request("GET", "/assets/app.mjs"), handler
         )
-        health = await _no_store_ui(make_mocked_request("GET", "/healthz"), handler)
+        health = await _revalidate_ui(make_mocked_request("GET", "/healthz"), handler)
 
-        assert asset.headers["Cache-Control"] == "no-store"
+        assert asset.headers["Cache-Control"] == "no-cache"
         assert "Cache-Control" not in health.headers
 
     asyncio.run(check())
+
+
+def test_only_runtime_assets_are_served():
+    paths = {resource.canonical for resource in create_app().router.resources()}
+
+    assert "/assets/app.mjs" in paths
+    assert "/assets/timeline.mjs" in paths
+    assert "/assets/styles.css" in paths
+    assert "/assets/timeline.test.mjs" not in paths

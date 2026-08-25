@@ -126,7 +126,10 @@ function selectable(element, record) {
   };
   element.addEventListener("click", select);
   element.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") select();
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      select();
+    }
   });
 }
 

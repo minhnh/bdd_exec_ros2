@@ -23,7 +23,15 @@ setup(
             glob(os_join("models", "robbdd", "*.*")),
         ),
     ],
-    package_data={package_name: ["py.typed", "web/*"]},
+    package_data={
+        package_name: [
+            "py.typed",
+            "web/index.html",
+            "web/styles.css",
+            "web/app.mjs",
+            "web/timeline.mjs",
+        ]
+    },
     install_requires=[
         "setuptools",
         "aiohttp",
@@ -36,7 +44,7 @@ setup(
         "scene-dsl",
         "robbdd",
     ],
-    zip_safe=True,
+    zip_safe=False,
     maintainer="Minh Nguyen",
     maintainer_email="1168534+minhnh@users.noreply.github.com",
     description="Execution setup for bdd-dsl with ROS2",

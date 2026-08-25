@@ -18,6 +18,7 @@ import json
 import threading
 import uuid
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from rclpy.executors import ExternalShutdownException
 
 from bdd_exec_ros2.conversions import from_uuid_msg
 
+RUNTIME_ASSETS = ("styles.css", "app.mjs", "timeline.mjs")
 ASSET_DIR = Path(__file__).parents[1] / "web"
 TRINARY_NAMES = {
     Trinary.TRUE: "true",
@@ -286,15 +288,19 @@ class TimelineStore:
 
 
 @web.middleware
-async def _no_store_ui(request: web.Request, handler: Any) -> web.StreamResponse:
+async def _revalidate_ui(request: web.Request, handler: Any) -> web.StreamResponse:
     response = await handler(request)
     if request.path == "/" or request.path.startswith("/assets/"):
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
 async def _index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(ASSET_DIR / "index.html")
+
+
+async def _asset(_: web.Request, name: str) -> web.FileResponse:
+    return web.FileResponse(ASSET_DIR / name)
 
 
 async def _health(request: web.Request) -> web.Response:
@@ -394,7 +400,7 @@ def create_app(
     event_topic: str = "/bdd/events",
     ros_args: list[str] | None = None,
 ) -> web.Application:
-    app = web.Application(middlewares=[_no_store_ui])
+    app = web.Application(middlewares=[_revalidate_ui])
     app["store"] = TimelineStore()
     app["status_topic"] = status_topic
     app["event_topic"] = event_topic
@@ -402,7 +408,8 @@ def create_app(
     app.router.add_get("/", _index)
     app.router.add_get("/healthz", _health)
     app.router.add_get("/ws", _websocket)
-    app.router.add_static("/assets", ASSET_DIR)
+    for name in RUNTIME_ASSETS:
+        app.router.add_get(f"/assets/{name}", partial(_asset, name=name))
     app.on_startup.append(_start_ros)
     app.on_cleanup.append(_stop_ros)
     return app
