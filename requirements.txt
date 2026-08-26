@@ -1,0 +1,3 @@
+aiohttp
+pyside6
+scipy>=1.16
