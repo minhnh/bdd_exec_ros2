@@ -261,7 +261,7 @@ function render() {
   const right = 24;
   const rowHeight = 52;
   const top = 34;
-  const height = top + lanes.length * rowHeight + 20;
+  const height = Math.max(top + lanes.length * rowHeight + 20, timeline.parentElement.clientHeight);
   const plotWidth = width - left - right;
   const duration = maximum - minimum;
   const x = (time) => left + ((time - minimum) / Math.max(duration, Number.EPSILON)) * plotWidth;

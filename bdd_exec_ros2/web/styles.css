@@ -114,6 +114,7 @@ output { min-width: 25rem; font-variant-numeric: tabular-nums; }
 .timeline-grid {
   display: grid;
   grid-template-columns: 32rem minmax(760px, 1fr);
+  min-height: 100%;
   min-width: calc(32rem + 760px);
 }
 
