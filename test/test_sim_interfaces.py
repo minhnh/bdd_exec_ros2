@@ -208,6 +208,26 @@ def test_create_spawn_entity_entries_converts_executable_scene_objects():
         assert message.entity_resource.uri == get_attr_path(resource)
 
 
+def test_create_spawn_entity_entries_skips_objects_backed_by_loaded_scene_model():
+    interface, scene = _spawn_interface(
+        SimpleNamespace(features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"])
+    )
+    shared_element = next(iter(scene.object_models))
+    shared_resource, _, _ = scene.resolve_element_root_frame(
+        shared_element, {SUPPORTED_FORMAT_URIS["usd"]}, interface._model_graph
+    )
+    scene.models[shared_resource.id] = shared_resource
+
+    entries = create_spawn_entity_entries(
+        scene,
+        interface._model_graph,
+        {SUPPORTED_FORMAT_URIS["usd"]},
+        world_entity_name="world",
+    )
+
+    assert shared_element not in {element_id for element_id, _ in entries}
+
+
 def test_create_spawn_entity_entries_rejects_missing_configured_world_mapping():
     features = SimpleNamespace(
         features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
