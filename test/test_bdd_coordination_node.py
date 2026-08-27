@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
-from bdd_ros2_interfaces.msg import ScenarioStatus
+from bdd_ros2_interfaces.msg import Event, ScenarioStatus
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 from rdf_utils.models.vocab import URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER
@@ -35,6 +35,32 @@ def _node(**attrs):
     node = BddCoordNode.__new__(BddCoordNode)
     node.__dict__.update(attrs)
     return node
+
+
+def test_context_free_event_is_recorded_for_each_active_scenario():
+    context_ids = (uuid4(), uuid4())
+    managers = (Mock(), Mock())
+    node = _node(
+        _scr_lock=threading.Lock(),
+        _scenario_contexts={
+            context_id: SimpleNamespace(obs_manager=manager)
+            for context_id, manager in zip(context_ids, managers, strict=True)
+        },
+        _ns_manager=Graph().namespace_manager,
+        _use_sim_time=False,
+        get_logger=Mock(return_value=Mock()),
+    )
+    message = Event()
+    message.uri = "urn:test:event"
+    message.stamp = Time(seconds=4).to_msg()
+
+    node.evt_sub_cb(message)
+
+    for manager in managers:
+        manager.on_event.assert_called_once_with(
+            evt_uri=URIRef("urn:test:event"),
+            evt_t=4.0,
+        )
 
 
 def test_none_mode_keeps_immediate_variation_execution():

@@ -38,6 +38,7 @@ from bdd_dsl.models.user_story import ScenarioVariantModel
 from bdd_dsl.representation import ScenarioVariantRep
 from bdd_ros2_interfaces.msg import (
     Configuration,
+    Event,
     FluentStatus,
     ParamValue,
     ScenarioStatus,
@@ -335,6 +336,15 @@ def to_scenario_status_msg(
     scr_status = ScenarioStatus()
     scr_status.representation = scr_rep.variant_rep
     scr_status.context_id = to_uuid_msg(ctx_id)
+    scr_status.events = [
+        Event(
+            scenario_context_id=scr_status.context_id,
+            stamp=Time(seconds=event_time).to_msg(),
+            uri=event_uri.toPython(),
+        )
+        for event_uri, event_times in obs_manager.event_timelines.items()
+        for event_time in event_times
+    ]
 
     if obs_manager.scr_start_time is not None:
         scr_status.start_time = Time(seconds=obs_manager.scr_start_time).to_msg()

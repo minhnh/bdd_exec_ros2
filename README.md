@@ -50,7 +50,7 @@ To run the mockup setup:
     When status timestamps use the simulated `/clock`, run the visualizer with ROS time enabled:
 
     ```bash
-    ros2 run bdd_exec_ros2 visualizer --ros-args -p use_sim_time:=true
+    ros2 run bdd_exec_ros2 web_visualizer --ros-args -p use_sim_time:=true
     ```
 
 1. Trigger test execution:
@@ -123,9 +123,16 @@ not named `world`.
 
 The [`web_visualizer.py`](./bdd_exec_ros2/executables/web_visualizer.py) script serves a seekable
 timeline at <http://127.0.0.1:8080>. It groups events, scenarios, behaviours, and observation-policy
-trinaries into lanes and exposes their details without a JavaScript framework. Use `--host`,
-`--port`, `--topic`, or `--event-topic` to override its defaults. The original
-[`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) desktop UI remains available.
+trinaries into lanes and exposes their details without a JavaScript framework. It subscribes only
+to coordinator status; the event lane is reconstructed from each scenario's embedded event history.
+Available options are:
+
+- `-t, --topic` (default: `/bdd/status`)
+- `--host` (default: `127.0.0.1`)
+- `--port` (default: `8080`)
+
+The original [`visualizer.py`](./bdd_exec_ros2/executables/visualizer.py) desktop UI remains
+available.
 
 The RobBDD
 mockup model includes a no-collision policy. Run it with `simulate_collision:=true` to see the
