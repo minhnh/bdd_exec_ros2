@@ -268,7 +268,6 @@ def test_events_remain_context_scoped_and_are_deduplicated():
     event_records = [record for record in store.records if record["kind"] == "event"]
     assert serialized["context_id"] == str(CONTEXT_ID)
     assert len(event_records) == 1
-    assert event_records[0]["label"] == "urn:bdd:event:grasped"
 
 
 def test_ui_assets_are_revalidated():

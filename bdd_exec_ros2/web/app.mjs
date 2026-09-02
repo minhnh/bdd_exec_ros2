@@ -116,7 +116,7 @@ function selectable(element, record) {
   element.setAttribute("role", "button");
   element.setAttribute(
     "aria-label",
-    displayKind(record) + " " + (record.label || "") + (record.discarded ? " discarded" : ""),
+    displayKind(record) + " " + (record.label ?? record.uri ?? "") + (record.discarded ? " discarded" : ""),
   );
   const select = () => {
     selectedRecord = record;

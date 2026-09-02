@@ -19,7 +19,7 @@ const stamp = (sec) => ({ sec, nanosec: 0 });
 test("builds compact lanes for only the selected scenario", () => {
   const records = [
     { id: "r1", sequence: 1, kind: "scenario_start", context_id: "ctx", stamp: stamp(10), label: "Pick" },
-    { id: "r2", sequence: 2, kind: "event", context_id: "ctx", stamp: stamp(11), label: "grasp" },
+    { id: "r2", sequence: 2, kind: "event", context_id: "ctx", stamp: stamp(11), uri: "urn:event:grasp" },
     { id: "r3", sequence: 3, kind: "trinary", context_id: "ctx", stamp: stamp(12), lane_type: "policy", label: "held", role: "assertion", value: "true", reason: "force norm is less than 5 N" },
     { id: "r4", sequence: 4, kind: "trinary", context_id: "ctx", stamp: stamp(12), lane_type: "policy", label: "held", role: "result", value: "true", reason: "all assertions are true" },
     { id: "r5", sequence: 5, kind: "event", context_id: "other", stamp: stamp(13), label: "ignored" },
@@ -153,10 +153,16 @@ test("projects timeline records into concise user-facing details", () => {
     ["Value", "true"],
     ["Reason", "completed"],
   ]);
-  assert.equal(
-    detailEntries({ ...record, lane_type: "policy" })[0][1],
-    "Fluent trinary",
-  );
+  const fluentDetails = detailEntries({
+    ...record,
+    lane_type: "policy",
+    uri: "urn:bdd:policy:held",
+  });
+  assert.equal(fluentDetails[0][1], "Fluent trinary");
+  assert.deepEqual(fluentDetails.find(([key]) => key === "URI"), [
+    "URI",
+    "urn:bdd:policy:held",
+  ]);
   assert.equal(detailEntries({ ...record, kind: "event" })[0][1], "Event");
   assert.equal(detailEntries({ ...record, kind: "scenario_end" })[0][1], "Scenario");
 });

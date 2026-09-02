@@ -99,6 +99,7 @@ export function detailEntries(record, useSimTime = false) {
     ["Kind", displayKind(record)],
     [useSimTime ? "Sim time" : "Time", formatStamp(record.stamp, useSimTime)],
     ["Label", record.label],
+    ["URI", record.uri],
     ["Value", record.value],
     ["Reason", record.reason],
     ["Discarded", record.discarded],

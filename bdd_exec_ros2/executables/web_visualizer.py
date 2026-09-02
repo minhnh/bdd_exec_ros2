@@ -152,7 +152,7 @@ class TimelineStore:
                     kind="event",
                     context_id=context_id,
                     stamp=time_dict(event.stamp),
-                    label=event.uri,
+                    uri=event.uri,
                 )
 
             self._add_trinary(
