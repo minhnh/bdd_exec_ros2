@@ -137,6 +137,7 @@ function drawTrinary(root, record, x, y) {
   const group = svg("g", {
     class: "marker " + record.value + (record.discarded ? " discarded" : ""),
   });
+  group.append(svg("circle", { class: "hit-target", cx: x, cy: y, r: 16 }));
   if (record.value === "true") {
     group.append(svg("circle", { cx: x, cy: y, r: 6 }));
   } else if (record.value === "false") {
@@ -322,14 +323,17 @@ function render() {
       }
     } else if (lane.type === "event") {
       for (const record of lane.records) {
-        const element = svg("circle", {
+        const group = svg("g", { class: "event-marker" });
+        const cx = x(recordSeconds(record));
+        group.append(svg("circle", { class: "hit-target", cx, cy: y, r: 16 }));
+        group.append(svg("circle", {
           class: "event",
-          cx: x(recordSeconds(record)),
+          cx,
           cy: y,
           r: 6,
-        });
-        selectable(element, record);
-        root.append(element);
+        }));
+        selectable(group, record);
+        root.append(group);
       }
     } else {
       for (const record of lane.records.filter(isTimelineTrinary)) {

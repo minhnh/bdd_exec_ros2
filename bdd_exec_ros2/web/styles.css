@@ -207,10 +207,17 @@ svg {
 .scenario.false { fill: #74363d; }
 .scenario.unknown { fill: #6c5a25; }
 .event { fill: var(--accent); stroke: #b9e3ff; cursor: pointer; }
+.event-marker { cursor: pointer; }
 .marker { cursor: pointer; stroke-width: 2; }
 .marker.true { fill: var(--true); stroke: var(--true); }
 .marker.false { stroke: var(--false); }
 .marker.unknown { fill: var(--unknown); stroke: var(--unknown); }
+.marker .hit-target,
+.event-marker .hit-target {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
 .marker.discarded > :not(.discarded-ring) { opacity: .32; }
 .marker .discarded-ring {
   fill: none;
