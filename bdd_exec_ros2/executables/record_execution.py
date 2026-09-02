@@ -13,8 +13,6 @@ def load_recording(config_path: Path, set_name: str) -> tuple[str, list[str]]:
     with config_path.open() as config_file:
         config = yaml.safe_load(config_file)
 
-    if not isinstance(config, dict) or config.get("schema_version") != 1:
-        raise ValueError("recording config must use schema_version: 1")
     try:
         trigger_topic = config["trigger_topic"]
         topics = config["topic_sets"][set_name]
