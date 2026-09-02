@@ -301,8 +301,6 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
                 f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
             )
 
-        # ponytail: sample RMS assumes the configured 100 Hz stream is regular;
-        # use time-weighted integration if irregular sampling becomes material.
         rms = sqrt(sum(value for _, value in self._samples) / len(self._samples))
         within_limit = rms <= self.max_force_n
         relation = "within" if within_limit else "exceeds"
@@ -320,6 +318,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         boundary_size_xy: tuple[float, float],
         margin_m: float = 0.05,
         footprint_size_xy: tuple[float, float] | None = None,
+        allowed_outside_ratio: float = 0.0,
     ) -> None:
         super().__init__()
         if any(size <= 0.0 for size in boundary_size_xy):
@@ -330,11 +329,14 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
             size <= 0.0 for size in footprint_size_xy
         ):
             raise ValueError("footprint dimensions must be positive")
+        if not 0.0 <= allowed_outside_ratio <= 1.0:
+            raise ValueError("allowed outside ratio must be between 0 and 1")
         self.object_uri = object_uri
         self.boundary_uri = boundary_uri
         self.boundary_size_xy = boundary_size_xy
         self.margin_m = margin_m
         self.footprint_size_xy = footprint_size_xy
+        self.allowed_outside_ratio = allowed_outside_ratio
 
     @staticmethod
     def _rotation(pose: Pose) -> Rotation:
@@ -383,42 +385,51 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
             object_pose.position.y - boundary_pose.position.y,
             object_pose.position.z - boundary_pose.position.z,
         ]
-        points = [boundary_inverse.apply(offset)]
-        if self.footprint_size_xy is not None:
-            assert object_rotation is not None
-            half_x, half_y = (size / 2.0 for size in self.footprint_size_xy)
-            points = [
-                boundary_inverse.apply(object_rotation.apply([x, y, 0.0]) + offset)
-                for x in (-half_x, half_x)
-                for y in (-half_y, half_y)
-            ]
-
         boundary_half_x = self.boundary_size_xy[0] / 2.0 - self.margin_m
         boundary_half_y = self.boundary_size_xy[1] / 2.0 - self.margin_m
-        clearance = min(
-            min(boundary_half_x - abs(point[0]), boundary_half_y - abs(point[1]))
-            for point in points
+        center = boundary_inverse.apply(offset)
+        if self.footprint_size_xy is None:
+            inside = bool(
+                abs(center[0]) <= boundary_half_x + 1e-9
+                and abs(center[1]) <= boundary_half_y + 1e-9
+            )
+            relation = "inside" if inside else "outside"
+            return inside, f"center {relation} boundary"
+
+        try:
+            from shapely.geometry import Polygon, box
+        except ImportError as exc:
+            raise RuntimeError(
+                "footprint containment requires the shapely package"
+            ) from exc
+
+        assert object_rotation is not None
+        half_x, half_y = (size / 2.0 for size in self.footprint_size_xy)
+        corners = (
+            (-half_x, -half_y),
+            (half_x, -half_y),
+            (half_x, half_y),
+            (-half_x, half_y),
         )
-        inside = bool(clearance >= -1e-9)
-        subject = "footprint" if self.footprint_size_xy is not None else "center"
-        relation = "inside" if inside else "outside"
+        footprint = Polygon(
+            [
+                tuple(
+                    boundary_inverse.apply(object_rotation.apply([x, y, 0.0]) + offset)[
+                        :2
+                    ]
+                )
+                for x, y in corners
+            ]
+        )
+        boundary = box(
+            -boundary_half_x, -boundary_half_y, boundary_half_x, boundary_half_y
+        )
+        outside_ratio = max(
+            0.0, min(1.0, footprint.difference(boundary).area / footprint.area)
+        )
+        inside = outside_ratio <= self.allowed_outside_ratio + 1e-9
+        relation = "within" if inside else "exceeds"
         return (
             inside,
-            f"{subject} {relation} boundary; worst clearance {clearance:.3f} m",
+            f"footprint outside ratio {outside_ratio * 100.0:.3f}% {relation} {self.allowed_outside_ratio * 100.0:.3f}% limit",
         )
-
-
-_SCENE = "https://secorolab.github.io/models/demos/collab/scene/"
-_DRAWER = URIRef(f"{_SCENE}drawer")
-_WALL_WS = URIRef(f"{_SCENE}wall-ws")
-_ROBOT_WS = URIRef(f"{_SCENE}robot-ws")
-_TRAY_SIZE = (0.23, 0.20)
-
-wall_ws_center_inside = PlanarContainmentEvaluator(_DRAWER, _WALL_WS, (1.40, 0.646))
-wall_ws_footprint_inside = PlanarContainmentEvaluator(
-    _DRAWER, _WALL_WS, (1.40, 0.646), footprint_size_xy=_TRAY_SIZE
-)
-robot_ws_center_inside = PlanarContainmentEvaluator(_DRAWER, _ROBOT_WS, (1.60, 0.80))
-robot_ws_footprint_inside = PlanarContainmentEvaluator(
-    _DRAWER, _ROBOT_WS, (1.60, 0.80), footprint_size_xy=_TRAY_SIZE
-)

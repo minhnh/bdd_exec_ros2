@@ -104,7 +104,7 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
         detection = Detection3D(id=str(entity))
         detection.bbox.center.orientation.w = 1.0
         detections.detections.append(detection)
-    detections.detections[0].bbox.center.position.x = 0.635
+    detections.detections[0].bbox.center.position.x = 0.640
 
     samples = [
         ObservationStamped(
@@ -121,12 +121,16 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
 
     center = PlanarContainmentEvaluator(drawer, workspace, (1.6, 0.8))
     footprint = PlanarContainmentEvaluator(
-        drawer, workspace, (1.6, 0.8), footprint_size_xy=(0.23, 0.20)
+        drawer,
+        workspace,
+        (1.6, 0.8),
+        footprint_size_xy=(0.24, 0.20),
+        allowed_outside_ratio=0.05,
     )
     assert center.evaluate(samples)[0] is True
     assert footprint.evaluate(samples)[0] is True
 
-    detections.detections[0].bbox.center.position.x = 0.636
+    detections.detections[0].bbox.center.position.x = 0.643
     moved = map_detection3d_pose_array_by_uri(detections, targets=[drawer, workspace])
     samples = [
         ObservationStamped(
@@ -136,14 +140,15 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     ]
     result, reason = footprint.evaluate(samples)
     assert result is False
-    assert "worst clearance" in reason
+    assert "outside ratio" in reason
+    assert "5.000% limit" in reason
 
     half_sqrt_two = 2**-0.5
     for detection in detections.detections:
         detection.bbox.center.orientation.z = half_sqrt_two
         detection.bbox.center.orientation.w = half_sqrt_two
     detections.detections[0].bbox.center.position.x = 0.0
-    detections.detections[0].bbox.center.position.y = 0.635
+    detections.detections[0].bbox.center.position.y = 0.640
     rotated = map_detection3d_pose_array_by_uri(detections, targets=[drawer, workspace])
     samples = [
         ObservationStamped(

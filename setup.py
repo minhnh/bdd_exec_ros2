@@ -38,6 +38,7 @@ setup(
         "pyside6",
         "numpy",
         "scipy>=1.16",
+        "shapely",
         # Requires source install from GitHub
         "rdf_utils",
         "bdd_dsl",
