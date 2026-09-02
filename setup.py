@@ -61,6 +61,7 @@ setup(
             "mockup_behaviour_node = bdd_exec_ros2.executables.mockup_behaviour_node:main",
             "visualizer = bdd_exec_ros2.executables.visualizer:main",
             "web_visualizer = bdd_exec_ros2.executables.web_visualizer:main",
+            "record_execution = bdd_exec_ros2.executables.record_execution:main",
         ],
     },
 )
