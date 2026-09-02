@@ -48,7 +48,6 @@ from bdd_exec_ros2.observation import (
     latest_identified_pose_stamp,
     map_detection3d_array_by_uri,
     map_detection3d_entity_by_dict,
-    map_detection3d_pose_array_by_uri,
     map_identified_pose_batch,
 )
 
@@ -87,11 +86,11 @@ def test_detection3d_array_adapter_maps_target_uris_and_bbox_centers():
         detections.detections.append(detection)
 
     mapped = map_detection3d_array_by_uri(detections, targets=[target])
+    assert list(mapped[0].value) == [1.0, 0.0, 0.0]
 
     assert header_stamp(detections, 42.0) == 3.5
-    assert [(item.entity_uri, item.value) for item in mapped] == [
-        (target, (1.0, 0.0, 0.0))
-    ]
+    assert [item.entity_uri for item in mapped] == [target]
+    assert list(mapped[0].value) == [1.0, 0.0, 0.0]
     detections.header.stamp = Time().to_msg()
     assert header_stamp(detections, 42.0) == 42.0
 
@@ -114,7 +113,7 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
             mapped.value,
         )
         for index, mapped in enumerate(
-            map_detection3d_pose_array_by_uri(detections, targets=[drawer, workspace])
+            map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
         )
     ]
     assert all(isinstance(sample.value, DetectedEntityPose) for sample in samples)
@@ -131,7 +130,7 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     assert footprint.evaluate(samples)[0] is True
 
     detections.detections[0].bbox.center.position.x = 0.643
-    moved = map_detection3d_pose_array_by_uri(detections, targets=[drawer, workspace])
+    moved = map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
     samples = [
         ObservationStamped(
             sample.observation_uri, sample.provider_uri, 2.0, value.value
@@ -149,7 +148,7 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
         detection.bbox.center.orientation.w = half_sqrt_two
     detections.detections[0].bbox.center.position.x = 0.0
     detections.detections[0].bbox.center.position.y = 0.640
-    rotated = map_detection3d_pose_array_by_uri(detections, targets=[drawer, workspace])
+    rotated = map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
     samples = [
         ObservationStamped(
             sample.observation_uri, sample.provider_uri, 3.0, value.value

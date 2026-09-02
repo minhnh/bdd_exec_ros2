@@ -44,10 +44,18 @@ from vision_msgs.msg import Detection3D, Detection3DArray
 from bdd_exec_ros2.conversions import ros_time_to_stamp
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class DetectedEntityPose:
     entity_uri: URIRef
     pose: Pose
+
+    def __iter__(self):
+        """Keep compatibility with bdd-dsl distance evaluators.
+
+        The evaluator in bdd-dsl passes values to math.dist(), which expects an Iterable.
+        """
+        position = self.pose.position
+        return iter((position.x, position.y, position.z))
 
 
 def _load_ros_comm_specs(graph: Graph, model: ModelBase) -> tuple[str, str]:
@@ -107,28 +115,6 @@ def header_stamp(observation: object, receipt_stamp: float) -> float:
 
 
 def map_detection3d_array_by_uri(
-    observation: Detection3DArray,
-    scene_instance: SceneInstanceModel | None = None,
-    targets: list[URIRef] | None = None,
-) -> list[EntityObservation]:
-    del scene_instance
-
-    target_set = set(targets) if targets is not None else None
-    mapped = []
-    for detection in observation.detections:
-        entity_uri = URIRef(detection.id) if detection.id else None
-        if entity_uri is None or (
-            target_set is not None and entity_uri not in target_set
-        ):
-            continue
-        position = detection.bbox.center.position
-        mapped.append(
-            EntityObservation(entity_uri, (position.x, position.y, position.z))
-        )
-    return mapped
-
-
-def map_detection3d_pose_array_by_uri(
     observation: Detection3DArray,
     scene_instance: SceneInstanceModel | None = None,
     targets: list[URIRef] | None = None,
