@@ -58,13 +58,13 @@ def main(args=None) -> int:
     parser.add_argument(
         "--startup-delay",
         type=float,
-        default=2.0,
+        default=1.0,
         help="Seconds to let rosbag discovery settle before triggering the test",
     )
     parser.add_argument(
         "--listener-timeout",
         type=float,
-        default=5.0,
+        default=3.0,
         help="Seconds to wait for subscription from the test coordinator on the start topic",
     )
     options = parser.parse_args(args)

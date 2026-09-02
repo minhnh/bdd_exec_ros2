@@ -166,8 +166,21 @@ class TimelineStore:
 
             for fluent in scenario.fluents:
                 active_key = (context_id, fluent.uri)
+                fluent_start = (
+                    _time_key(fluent.start_time)
+                    if has_time(fluent.start_time)
+                    else None
+                )
+                fluent_end = (
+                    _time_key(fluent.end_time) if has_time(fluent.end_time) else None
+                )
                 current: set[str] = set()
                 for item in fluent.trinaries:
+                    item_time = _time_key(item.stamp)
+                    if fluent_start is not None and item_time < fluent_start:
+                        continue
+                    if fluent_end is not None and item_time > fluent_end:
+                        continue
                     record_id = self._add_trinary(
                         new_records,
                         context_id,
