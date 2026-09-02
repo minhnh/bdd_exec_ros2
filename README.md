@@ -112,7 +112,7 @@ ros2 run bdd_exec_ros2 record_execution \
 The bag is written under the current directory by default, in a timestamped directory named after the
 selected topic set, such as `icra-sim-20260902T143012123456Z/`. Use `--output-dir` to choose another
 parent directory. `--startup-delay` controls rosbag discovery startup, and `--listener-timeout`
-(default 5 seconds) bounds waiting for the coordinator. If no subscriber appears, recording is stopped
+bounds waiting for the coordinator. If no subscriber appears, recording is stopped
 and the command exits with an error.
 
 ### Simulation Interface Test

@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+try:
+    from aiohttp import WSMsgType, web
+except ImportError as exc:
+    raise RuntimeError(
+        "Web visualizer requires the 'aiohttp' package, have you tried installing [vis] dependencies?"
+    ) from exc
 import argparse
 import asyncio
 import json
@@ -23,7 +29,6 @@ from pathlib import Path
 from typing import Any
 
 import rclpy
-from aiohttp import WSMsgType, web
 from bdd_ros2_interfaces.msg import ScenarioStatusList, Trinary
 from builtin_interfaces.msg import Time
 from rclpy.executors import ExternalShutdownException

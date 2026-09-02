@@ -11,6 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+try:
+    from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal, Slot
+    from PySide6.QtGui import QBrush, QColor
+    from PySide6.QtWidgets import (
+        QApplication,
+        QHBoxLayout,
+        QHeaderView,
+        QLabel,
+        QMainWindow,
+        QPushButton,
+        QStyle,
+        QStyledItemDelegate,
+        QTreeWidget,
+        QTreeWidgetItem,
+        QVBoxLayout,
+        QWidget,
+    )
+except ImportError as exc:
+    raise RuntimeError(
+        "Visualizer requires the 'PySide6' package, have you tried installing [vis] dependencies?"
+    ) from exc
 import argparse
 import signal
 import sys
@@ -25,25 +47,7 @@ from bdd_ros2_interfaces.msg import (
     ScenarioStatusList,
     TrinaryStamped,
 )
-from bdd_ros2_interfaces.msg import (
-    Trinary as TrinaryMsg,
-)
-from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (
-    QApplication,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
-    QMainWindow,
-    QPushButton,
-    QStyle,
-    QStyledItemDelegate,
-    QTreeWidget,
-    QTreeWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+from bdd_ros2_interfaces.msg import Trinary as TrinaryMsg
 from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 
