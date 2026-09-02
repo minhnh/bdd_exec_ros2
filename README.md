@@ -93,7 +93,6 @@ waits for the configured trigger-topic subscriber, and publishes one empty trigg
 coordinator. The configuration contains a `trigger_topic` and named `topic_sets`, for example:
 
 ```yaml
-schema_version: 1
 trigger_topic: "/bdd/start"
 topic_sets:
   icra-sim:
@@ -101,10 +100,13 @@ topic_sets:
     - "/bdd/events"
 ```
 
-Run it with the config file and topic-set name:
+Run it with the config file and topic-set name. For the RobBDD mockup launch:
 
 ```bash
-ros2 run bdd_exec_ros2 record_execution path/to/recording.yaml icra-sim
+ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml
+ros2 run bdd_exec_ros2 record_execution \
+  "$(ros2 pkg prefix bdd_exec_ros2)/share/bdd_exec_ros2/config/mockup_recording.yaml" \
+  mockup
 ```
 
 The bag is written under the current directory by default, in a timestamped directory named after the
