@@ -123,8 +123,8 @@ export function buildLanes(input, contextId, definitions = []) {
   };
   const children = new Map();
 
-  function clause(laneType, label) {
-    const key = laneType + ":" + label;
+  function clause(laneType, label, uri = "") {
+    const key = laneType + ":" + (uri || label);
     if (!children.has(key)) {
       children.set(key, {
         id: contextId + ":" + key,
@@ -137,7 +137,9 @@ export function buildLanes(input, contextId, definitions = []) {
     return children.get(key);
   }
 
-  for (const definition of definitions) clause(definition.lane_type, definition.label);
+  for (const definition of definitions) {
+    clause(definition.lane_type, definition.label, definition.uri);
+  }
   for (const record of records) {
     if (record.context_id !== contextId || record.kind === "event") continue;
     if (record.kind === "scenario_start" || record.kind === "scenario_end") {
@@ -146,7 +148,7 @@ export function buildLanes(input, contextId, definitions = []) {
       continue;
     }
     if (record.kind !== "trinary") continue;
-    const child = clause(record.lane_type, record.label);
+    const child = clause(record.lane_type, record.label, record.uri);
     child.records.push(record);
     if (record.role === "assertion" && record.reason) child.message = record.reason;
   }

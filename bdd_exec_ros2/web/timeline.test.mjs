@@ -45,6 +45,21 @@ test("builds compact lanes for only the selected scenario", () => {
   assert.deepEqual(timeExtent(materializeRecords(records.slice(0, 4))), [10, 12]);
 });
 
+test("keeps identical policy labels distinct by URI", () => {
+  const records = [
+    { id: "r1", sequence: 1, kind: "trinary", context_id: "ctx", stamp: stamp(1), lane_type: "policy", uri: "urn:policy:a", label: "held", role: "result", value: "true" },
+    { id: "r2", sequence: 2, kind: "trinary", context_id: "ctx", stamp: stamp(1), lane_type: "policy", uri: "urn:policy:b", label: "held", role: "result", value: "false" },
+  ];
+
+  const lanes = buildLanes(records, "ctx", [
+    { lane_type: "policy", uri: "urn:policy:a", label: "held" },
+    { lane_type: "policy", uri: "urn:policy:b", label: "held" },
+  ]);
+
+  assert.deepEqual(lanes.slice(2).map((lane) => lane.label), ["held", "held"]);
+  assert.deepEqual(lanes.slice(2).map((lane) => lane.records[0].value), ["true", "false"]);
+});
+
 test("keeps scenario clocks independent and freezes completed scenarios", () => {
   const records = [
     { id: "a1", sequence: 1, kind: "scenario_start", context_id: "a", stamp: stamp(10), label: "A" },

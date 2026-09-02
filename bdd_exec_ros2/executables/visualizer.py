@@ -441,12 +441,13 @@ class BddVisualizer(QMainWindow):
                 cleanup_set.add(ctx_id)
 
             for fl_status in scr_status.fluents:
+                f_uri = fl_status.uri
                 f_rep = fl_status.representation
-                if f_rep not in scr_data["children"]:
+                if f_uri not in scr_data["children"]:
                     fl_item = create_new_clause_item(scr_item=scr_item, rep=f_rep)
-                    scr_data["children"][f_rep] = {"item": fl_item, "children": {}}
+                    scr_data["children"][f_uri] = {"item": fl_item, "children": {}}
 
-                fl_data = scr_data["children"][f_rep]
+                fl_data = scr_data["children"][f_uri]
                 fl_item = fl_data["item"]
 
                 update_fluent_item_view(
