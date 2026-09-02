@@ -364,7 +364,7 @@ def to_scenario_status_msg(
 
     scr_status.fluents = []
     fluent_results = []
-    for obs_pol in obs_manager.obs_policies.values():
+    for policy_uri, obs_pol in obs_manager.obs_policies.items():
         fl_res = obs_pol.get_result(
             stamp=now_stamp,
             trinaries_policy=trinaries_policy,
@@ -379,6 +379,7 @@ def to_scenario_status_msg(
         fluent_results.append(fl_res)
 
         fl_status = FluentStatus()
+        fl_status.uri = str(policy_uri)
         fl_status.representation = scr_rep.clause_rep(clause_id=obs_pol.fluent_id)
         if obs_pol.start_time is not None:
             fl_status.start_time = Time(seconds=obs_pol.start_time).to_msg()

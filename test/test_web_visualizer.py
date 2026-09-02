@@ -68,6 +68,7 @@ def status(
     *trinaries: TrinaryStamped, events: tuple[Event, ...] = ()
 ) -> ScenarioStatusList:
     fluent = FluentStatus()
+    fluent.uri = "urn:bdd:policy:held"
     fluent.representation = "the object is held"
     fluent.trinaries = list(trinaries)
 
@@ -94,6 +95,7 @@ def test_ros_messages_are_serialized_to_the_browser_contract():
 
     assert scenario["context_id"] == str(CONTEXT_ID)
     assert scenario["start_time"] == {"sec": 1, "nanosec": 0}
+    assert scenario["fluents"][0]["uri"] == "urn:bdd:policy:held"
     assert observed["value"] == "false"
     assert observed["reason"] == "observed"
 
@@ -135,6 +137,55 @@ def test_behaviour_result_stamp_is_unset_until_a_terminal_trinary_exists():
         )
         assert terminal.behaviour.result.stamp == Time(sec=2, nanosec=500_000_000)
         assert terminal.behaviour.result.trinary.value == message_value
+
+
+def test_policy_uri_distinguishes_identical_clause_representations():
+    policy = SimpleNamespace(
+        fluent_id=URIRef("urn:bdd:fluent:held"),
+        fluent_types=set(),
+        start_time=None,
+        end_time=None,
+        trinary_timeline=[],
+        get_result=lambda **_: DslTrinaryStamped(2.0, Unknown, "no observations"),
+    )
+    obs_manager = SimpleNamespace(
+        scr_start_time=1.0,
+        scr_end_time=None,
+        bhv_result=None,
+        obs_policies={
+            URIRef("urn:bdd:policy:ground-truth"): policy,
+            URIRef("urn:bdd:policy:perception"): policy,
+        },
+        event_timelines={},
+    )
+    representation = SimpleNamespace(
+        variant_rep="Pick the object",
+        bhv_rep="pick",
+        clause_rep=lambda clause_id: "Then the object is held",
+    )
+
+    scenario = to_scenario_status_msg(
+        CONTEXT_ID,
+        obs_manager,
+        representation,
+        RclpyTime(seconds=2),
+        lambda _: (Unknown, ""),
+    )
+
+    assert [(fluent.uri, fluent.representation) for fluent in scenario.fluents] == [
+        ("urn:bdd:policy:ground-truth", "Then the object is held"),
+        ("urn:bdd:policy:perception", "Then the object is held"),
+    ]
+
+    store = TimelineStore()
+    store.ingest_status(ScenarioStatusList(stamp=stamp(2), scenarios=[scenario]))
+    policy_records = [
+        record for record in store.records if record.get("lane_type") == "policy"
+    ]
+    assert [record["uri"] for record in policy_records] == [
+        "urn:bdd:policy:ground-truth",
+        "urn:bdd:policy:perception",
+    ]
 
 
 def test_status_conversion_embeds_events():

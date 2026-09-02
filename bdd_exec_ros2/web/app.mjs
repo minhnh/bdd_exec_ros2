@@ -248,7 +248,11 @@ function render() {
   const definitions = snapshotScenario ? [
     { lane_type: "behaviour", label: snapshotScenario.behaviour.representation },
     ...snapshotScenario.fluents.map(
-      (fluent) => ({ lane_type: "policy", label: fluent.representation }),
+      (fluent) => ({
+        lane_type: "policy",
+        uri: fluent.uri,
+        label: fluent.representation,
+      }),
     ),
   ] : [];
   const lanes = buildLanes(visible, scenario.contextId, definitions);

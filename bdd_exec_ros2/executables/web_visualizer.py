@@ -79,6 +79,7 @@ def status_dict(msg: ScenarioStatusList) -> dict[str, Any]:
                 ],
                 "fluents": [
                     {
+                        "uri": fluent.uri,
                         "representation": fluent.representation,
                         "start_time": time_dict(fluent.start_time),
                         "end_time": time_dict(fluent.end_time),
@@ -164,7 +165,7 @@ class TimelineStore:
             )
 
             for fluent in scenario.fluents:
-                active_key = (context_id, fluent.representation)
+                active_key = (context_id, fluent.uri)
                 current: set[str] = set()
                 for item in fluent.trinaries:
                     record_id = self._add_trinary(
@@ -174,6 +175,7 @@ class TimelineStore:
                         fluent.representation,
                         "assertion",
                         item,
+                        uri=fluent.uri,
                     )
                     if record_id is not None:
                         current.add(record_id)
@@ -185,6 +187,7 @@ class TimelineStore:
                     fluent.representation,
                     "result",
                     fluent.result,
+                    uri=fluent.uri,
                 )
 
                 for record_id in self._active.get(active_key, set()) - current:
@@ -223,6 +226,7 @@ class TimelineStore:
         label: str,
         role: str,
         msg,
+        uri: str = "",
     ) -> str | None:
         if not has_time(msg.stamp):
             return None
@@ -231,7 +235,7 @@ class TimelineStore:
             "trinary",
             context_id,
             lane_type,
-            label,
+            uri or label,
             role,
             _time_key(msg.stamp),
             data["value"],
@@ -244,6 +248,7 @@ class TimelineStore:
             context_id=context_id,
             stamp=data["stamp"],
             lane_type=lane_type,
+            uri=uri,
             label=label,
             role=role,
             value=data["value"],
