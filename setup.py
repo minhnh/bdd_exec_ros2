@@ -34,11 +34,8 @@ setup(
     },
     install_requires=[
         "setuptools",
-        "aiohttp",
-        "pyside6",
         "numpy",
         "scipy>=1.16",
-        "shapely",
         # Requires source install from GitHub
         "rdf_utils",
         "bdd_dsl",
@@ -51,9 +48,8 @@ setup(
     description="Execution setup for bdd-dsl with ROS2",
     license="Apache-2.0",
     extras_require={
-        "test": [
-            "pytest",
-        ],
+        "test": ["pytest", "aiohttp"],
+        "vis": ["aiohttp", "pyside6"],
     },
     entry_points={
         "console_scripts": [

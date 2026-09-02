@@ -86,6 +86,33 @@ ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml \
   world_entity_name:=world
 ```
 
+### Rosbag Recording
+
+[`record_execution.py`](./bdd_exec_ros2/executables/record_execution.py) records the configured topic set,
+waits for the configured trigger-topic subscriber, and publishes one empty trigger message to start the
+coordinator. The configuration contains a `trigger_topic` and named `topic_sets`, for example:
+
+```yaml
+schema_version: 1
+trigger_topic: "/bdd/start"
+topic_sets:
+  icra-sim:
+    - "/bdd/status"
+    - "/bdd/events"
+```
+
+Run it with the config file and topic-set name:
+
+```bash
+ros2 run bdd_exec_ros2 record_execution path/to/recording.yaml icra-sim
+```
+
+The bag is written under the current directory by default, in a timestamped directory named after the
+selected topic set, such as `icra-sim-20260902T143012123456Z/`. Use `--output-dir` to choose another
+parent directory. `--startup-delay` controls rosbag discovery startup, and `--listener-timeout`
+(default 5 seconds) bounds waiting for the coordinator. If no subscriber appears, recording is stopped
+and the command exits with an error.
+
 ### Simulation Interface Test
 
 [`sim_interface_test.py`](./bdd_exec_ros2/executables/sim_interface_test.py) is an interactive
