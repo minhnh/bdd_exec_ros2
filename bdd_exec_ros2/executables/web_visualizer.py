@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+try:
+    from aiohttp import WSMsgType, web
+except ImportError as exc:
+    raise RuntimeError(
+        "Web visualizer requires the 'aiohttp' package, have you tried installing [vis] dependencies?"
+    ) from exc
 import argparse
 import asyncio
 import json
@@ -23,7 +29,6 @@ from pathlib import Path
 from typing import Any
 
 import rclpy
-from aiohttp import WSMsgType, web
 from bdd_ros2_interfaces.msg import ScenarioStatusList, Trinary
 from builtin_interfaces.msg import Time
 from rclpy.executors import ExternalShutdownException
@@ -166,8 +171,21 @@ class TimelineStore:
 
             for fluent in scenario.fluents:
                 active_key = (context_id, fluent.uri)
+                fluent_start = (
+                    _time_key(fluent.start_time)
+                    if has_time(fluent.start_time)
+                    else None
+                )
+                fluent_end = (
+                    _time_key(fluent.end_time) if has_time(fluent.end_time) else None
+                )
                 current: set[str] = set()
                 for item in fluent.trinaries:
+                    item_time = _time_key(item.stamp)
+                    if fluent_start is not None and item_time < fluent_start:
+                        continue
+                    if fluent_end is not None and item_time > fluent_end:
+                        continue
                     record_id = self._add_trinary(
                         new_records,
                         context_id,

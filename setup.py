@@ -34,8 +34,6 @@ setup(
     },
     install_requires=[
         "setuptools",
-        "aiohttp",
-        "pyside6",
         "numpy",
         "scipy>=1.16",
         # Requires source install from GitHub
@@ -50,9 +48,8 @@ setup(
     description="Execution setup for bdd-dsl with ROS2",
     license="Apache-2.0",
     extras_require={
-        "test": [
-            "pytest",
-        ],
+        "test": ["pytest", "aiohttp"],
+        "vis": ["aiohttp", "pyside6"],
     },
     entry_points={
         "console_scripts": [
@@ -61,6 +58,7 @@ setup(
             "mockup_behaviour_node = bdd_exec_ros2.executables.mockup_behaviour_node:main",
             "visualizer = bdd_exec_ros2.executables.visualizer:main",
             "web_visualizer = bdd_exec_ros2.executables.web_visualizer:main",
+            "record_execution = bdd_exec_ros2.executables.record_execution:main",
         ],
     },
 )

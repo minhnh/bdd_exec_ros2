@@ -1,0 +1,9 @@
+trigger_topic: "/bdd/start"
+topic_sets:
+  mockup:
+    - "/bdd/status"
+    - "/bdd/events"
+    - "/obs_policy/located_at_pick_ws"
+    - "/obs_policy/is_held"
+    - "/obs_policy/detections_3d"
+    - "/observations/collision"

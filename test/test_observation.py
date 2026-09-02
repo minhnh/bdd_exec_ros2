@@ -27,6 +27,7 @@ from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.time import Time
 from rdflib import URIRef
+from trinary import Unknown
 from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
@@ -36,8 +37,12 @@ from bdd_exec_ros2.executables.mockup_behaviour_node import (
     map_detection3d_entity_mockup,
 )
 from bdd_exec_ros2.observation import (
+    DetectedEntityPose,
+    PlanarContainmentEvaluator,
     TargetsDoNotCollideEvaluator,
     WrenchForceNormWithinLimitEvaluator,
+    WrenchPeakForceNormWithinLimitEvaluator,
+    WrenchRmsForceNormWithinLimitEvaluator,
     collision_stamp,
     header_stamp,
     latest_identified_pose_stamp,
@@ -81,13 +86,76 @@ def test_detection3d_array_adapter_maps_target_uris_and_bbox_centers():
         detections.detections.append(detection)
 
     mapped = map_detection3d_array_by_uri(detections, targets=[target])
+    assert list(mapped[0].value) == [1.0, 0.0, 0.0]
 
     assert header_stamp(detections, 42.0) == 3.5
-    assert [(item.entity_uri, item.value) for item in mapped] == [
-        (target, (1.0, 0.0, 0.0))
-    ]
+    assert [item.entity_uri for item in mapped] == [target]
+    assert list(mapped[0].value) == [1.0, 0.0, 0.0]
     detections.header.stamp = Time().to_msg()
     assert header_stamp(detections, 42.0) == 42.0
+
+
+def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
+    drawer = URIRef("urn:test:drawer")
+    workspace = URIRef("urn:test:workspace")
+    detections = Detection3DArray()
+    for entity in (drawer, workspace):
+        detection = Detection3D(id=str(entity))
+        detection.bbox.center.orientation.w = 1.0
+        detections.detections.append(detection)
+    detections.detections[0].bbox.center.position.x = 0.640
+
+    samples = [
+        ObservationStamped(
+            URIRef(f"urn:test:observation:{index}"),
+            URIRef("urn:test:provider"),
+            1.0,
+            mapped.value,
+        )
+        for index, mapped in enumerate(
+            map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
+        )
+    ]
+    assert all(isinstance(sample.value, DetectedEntityPose) for sample in samples)
+
+    center = PlanarContainmentEvaluator(drawer, workspace, (1.6, 0.8))
+    footprint = PlanarContainmentEvaluator(
+        drawer,
+        workspace,
+        (1.6, 0.8),
+        footprint_size_xy=(0.24, 0.20),
+        allowed_outside_ratio=0.05,
+    )
+    assert center.evaluate(samples)[0] is True
+    assert footprint.evaluate(samples)[0] is True
+
+    detections.detections[0].bbox.center.position.x = 0.643
+    moved = map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
+    samples = [
+        ObservationStamped(
+            sample.observation_uri, sample.provider_uri, 2.0, value.value
+        )
+        for sample, value in zip(samples, moved, strict=True)
+    ]
+    result, reason = footprint.evaluate(samples)
+    assert result is False
+    assert "outside ratio" in reason
+    assert "5.000% limit" in reason
+
+    half_sqrt_two = 2**-0.5
+    for detection in detections.detections:
+        detection.bbox.center.orientation.z = half_sqrt_two
+        detection.bbox.center.orientation.w = half_sqrt_two
+    detections.detections[0].bbox.center.position.x = 0.0
+    detections.detections[0].bbox.center.position.y = 0.640
+    rotated = map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
+    samples = [
+        ObservationStamped(
+            sample.observation_uri, sample.provider_uri, 3.0, value.value
+        )
+        for sample, value in zip(samples, rotated, strict=True)
+    ]
+    assert footprint.evaluate(samples)[0] is True
 
 
 def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
@@ -131,6 +199,25 @@ def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
         )
     with pytest.raises(TypeError, match="std_msgs/Header"):
         header_stamp(object(), 42.0)
+
+
+def test_peak_and_rms_force_evaluators_accumulate_and_warm_up():
+    message = WrenchStamped()
+    observation_uri = URIRef("urn:test:wrench-observation")
+    provider_uri = URIRef("urn:test:wrench-provider")
+
+    def sample(stamp: float, force: float) -> ObservationStamped:
+        message.wrench.force.x = force
+        return ObservationStamped(observation_uri, provider_uri, stamp, message)
+
+    peak = WrenchPeakForceNormWithinLimitEvaluator()
+    assert peak.evaluate([sample(0.0, 10.0)])[0] is True
+    assert peak.evaluate([sample(0.1, 50.0)])[0] is False
+
+    rms = WrenchRmsForceNormWithinLimitEvaluator()
+    assert rms.evaluate([sample(0.0, 10.0)])[0] is Unknown
+    assert rms.evaluate([sample(0.25, 10.0)])[0] is True
+    assert rms.evaluate([sample(0.26, 20.0)])[0] is False
 
 
 def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():
