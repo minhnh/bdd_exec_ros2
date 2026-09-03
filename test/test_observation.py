@@ -27,7 +27,6 @@ from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.time import Time
 from rdflib import URIRef
-from trinary import Unknown
 from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
@@ -215,7 +214,7 @@ def test_peak_and_rms_force_evaluators_accumulate_and_warm_up():
     assert peak.evaluate([sample(0.1, 50.0)])[0] is False
 
     rms = WrenchRmsForceNormWithinLimitEvaluator()
-    assert rms.evaluate([sample(0.0, 10.0)])[0] is Unknown
+    assert rms.evaluate([sample(0.0, 10.0)])[0] is None
     assert rms.evaluate([sample(0.25, 10.0)])[0] is True
     assert rms.evaluate([sample(0.26, 20.0)])[0] is False
 

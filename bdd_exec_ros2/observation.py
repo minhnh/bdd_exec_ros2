@@ -269,7 +269,7 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
 
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
-    ) -> tuple[bool | Trinary, str]:
+    ) -> tuple[bool | Trinary | None, str]:
         norm = _wrench_force_norm(observations)
         stamp = observations[0].stamp
         if self._first_stamp is None:
@@ -283,7 +283,7 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
             self._samples.popleft()
         if stamp - self._first_stamp < self.window_seconds:
             return (
-                Unknown,
+                None,
                 f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
             )
 

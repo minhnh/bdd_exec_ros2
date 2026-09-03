@@ -281,10 +281,10 @@ class BddCoordNode(Node):
             raise TypeError(
                 f"expected float for 'timer_period' param, got: {type(timer_period)}"
             )
-        self.timer = self.create_timer(timer_period, self._status_timer_callback)
         self._scr_status_pub = self.create_publisher(
             msg_type=ScenarioStatusList, topic=status_topic, qos_profile=10
         )
+        self.timer = self.create_timer(timer_period, self._status_timer_callback)
 
         # Load model graph
         g_models_yml = self.get_parameter("graph_models").value
@@ -916,9 +916,8 @@ class BddCoordNode(Node):
             trin_st = None
         else:
             trin_st, _ = from_trin_stamped_msg(result.result)
-            self.get_logger().info(
-                f"Result received for {context_id.hex}: {TRINARY_NAMES[trin_val]}"
-            )
+            trin_rep = f"{TRINARY_NAMES[trin_val]} ({format_time_msg(msg=result.result.stamp, use_sim_time=self._use_sim_time)})"
+            self.get_logger().info(f"Result received for {context_id.hex}: {trin_rep}")
 
         with self._scr_lock:
             if context_id not in self._scenario_contexts:
