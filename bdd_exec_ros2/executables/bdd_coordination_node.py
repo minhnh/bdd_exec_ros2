@@ -170,6 +170,7 @@ class ScenarioContext:
     simulation_observations: dict[URIRef, tuple[float, dict[URIRef, URIRef]]]
     # Useful for handling timeout, cancelation
     goal_handle: ClientGoalHandle | None = None
+    end_event_sent: bool = False
 
 
 class BddCoordNode(Node):
@@ -766,6 +767,18 @@ class BddCoordNode(Node):
 
             finished_ids = set()
             for ctx_id, scr_ctx in self._scenario_contexts.items():
+                if (
+                    not scr_ctx.end_event_sent
+                    and (end_deadline := scr_ctx.obs_manager.pending_end_deadline)
+                    is not None
+                    and now_stamp >= end_deadline
+                ):
+                    self._send_event(
+                        evt_uri=scr_ctx.obs_manager.scenario_exec.end_event,
+                        ctx_id=ctx_id,
+                    )
+                    scr_ctx.end_event_sent = True
+
                 scr_status = to_scenario_status_msg(
                     ctx_id=ctx_id,
                     obs_manager=scr_ctx.obs_manager,
@@ -929,9 +942,6 @@ class BddCoordNode(Node):
             ctx = self._scenario_contexts[context_id]
             if trin_st is not None:
                 ctx.obs_manager.update_bhv_result(trin_st=trin_st)
-            self._send_event(
-                evt_uri=ctx.obs_manager.scenario_exec.end_event, ctx_id=context_id
-            )
 
 
 def main(args=None):

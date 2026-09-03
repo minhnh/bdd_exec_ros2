@@ -190,8 +190,11 @@ def test_completed_context_advances_the_setup_queue():
     now = Time(seconds=2.0)
     context = SimpleNamespace(
         context_id=context_id,
-        obs_manager=SimpleNamespace(scr_end_time=1.0, obs_policies={}),
+        obs_manager=SimpleNamespace(
+            scr_end_time=1.0, obs_policies={}, pending_end_deadline=None
+        ),
         scr_rep=object(),
+        end_event_sent=False,
     )
     node = _node(
         _scenario_contexts={context_id: context},
@@ -222,8 +225,10 @@ def test_completed_context_is_retained_during_observation_horizon():
         obs_manager=SimpleNamespace(
             scr_end_time=1.0,
             obs_policies={URIRef("urn:test:policy"): SimpleNamespace(end_time=3.0)},
+            pending_end_deadline=None,
         ),
         scr_rep=object(),
+        end_event_sent=False,
     )
     node = _node(
         _scenario_contexts={context_id: context},
@@ -255,13 +260,14 @@ def test_completed_context_is_retained_during_observation_horizon():
     node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
 
 
-def test_behaviour_result_is_recorded_before_scenario_ends():
+def test_behaviour_result_is_recorded_without_ending_scenario():
     context_id = uuid4()
     trinary = SimpleNamespace(value=next(iter(TRINARY_NAMES)))
     result = SimpleNamespace(
         result=SimpleNamespace(
             scenario_context_id=object(),
             trinary=trinary,
+            stamp=Time().to_msg(),
         )
     )
     obs_manager = SimpleNamespace(
@@ -271,9 +277,8 @@ def test_behaviour_result_is_recorded_before_scenario_ends():
     node = _node(
         _scenario_contexts={context_id: SimpleNamespace(obs_manager=obs_manager)},
         _scr_lock=threading.Lock(),
-        _send_event=Mock(
-            side_effect=lambda **_: obs_manager.update_bhv_result.assert_called_once()
-        ),
+        _send_event=Mock(),
+        _use_sim_time=False,
         get_logger=Mock(return_value=Mock()),
     )
 
@@ -292,7 +297,45 @@ def test_behaviour_result_is_recorded_before_scenario_ends():
             context_id,
         )
 
-    node._send_event.assert_called_once()
+    obs_manager.update_bhv_result.assert_called_once()
+    node._send_event.assert_not_called()
+
+
+def test_scenario_ends_once_after_pending_observation_deadline():
+    context_id = uuid4()
+    end_event = URIRef("urn:test:end")
+    context = SimpleNamespace(
+        context_id=context_id,
+        obs_manager=SimpleNamespace(
+            pending_end_deadline=3.0,
+            scenario_exec=SimpleNamespace(end_event=end_event),
+            scr_end_time=None,
+            obs_policies={},
+        ),
+        scr_rep=object(),
+        end_event_sent=False,
+    )
+    node = _node(
+        _scenario_contexts={context_id: context},
+        _scr_lock=threading.Lock(),
+        _send_event=Mock(),
+        _scr_status_pub=Mock(),
+        _schedule_next_scenario=Mock(),
+        get_clock=Mock(
+            return_value=SimpleNamespace(now=Mock(return_value=Time(seconds=2.0)))
+        ),
+    )
+
+    with patch(
+        "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg",
+        return_value=ScenarioStatus(),
+    ):
+        node._status_timer_callback()
+        node.get_clock.return_value.now.return_value = Time(seconds=3.0)
+        node._status_timer_callback()
+        node._status_timer_callback()
+
+    node._send_event.assert_called_once_with(evt_uri=end_event, ctx_id=context_id)
 
 
 def test_rejected_behaviour_sets_scenario_false_before_ending():
