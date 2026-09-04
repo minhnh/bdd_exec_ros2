@@ -768,6 +768,20 @@ class BddCoordNode(Node):
             finished_ids = set()
             for ctx_id, scr_ctx in self._scenario_contexts.items():
                 if (
+                    scr_ctx.obs_manager.scr_start_time is not None
+                    and now_stamp < scr_ctx.obs_manager.scr_start_time
+                ):
+                    # this is needed to clear scenarios after a simulation reset
+                    # since clock would again start from 0
+                    if not self._use_sim_time:
+                        raise RuntimeError(
+                            f"not using simulation time but now ({now_stamp}) < scenario start"
+                            f" ({scr_ctx.obs_manager.scr_start_time}) for '{scr_ctx.context_id}'"
+                        )
+                    finished_ids.add(ctx_id)
+                    continue
+
+                if (
                     not scr_ctx.end_event_sent
                     and (end_deadline := scr_ctx.obs_manager.pending_end_deadline)
                     is not None
@@ -801,7 +815,7 @@ class BddCoordNode(Node):
                     finished_ids.add(ctx_id)
 
             for ctx_id in finished_ids:
-                self.get_logger().info(f"Scenario {ctx_id.hex} completed, removing...")
+                self.get_logger().info(f"Scenario {ctx_id.hex} finished, removing...")
                 self._remove_context_topic_reg(context_id=ctx_id)
                 del self._scenario_contexts[ctx_id]
 

@@ -191,7 +191,10 @@ def test_completed_context_advances_the_setup_queue():
     context = SimpleNamespace(
         context_id=context_id,
         obs_manager=SimpleNamespace(
-            scr_end_time=1.0, obs_policies={}, pending_end_deadline=None
+            scr_start_time=0.0,
+            scr_end_time=1.0,
+            obs_policies={},
+            pending_end_deadline=None,
         ),
         scr_rep=object(),
         end_event_sent=False,
@@ -223,6 +226,7 @@ def test_completed_context_is_retained_during_observation_horizon():
     context = SimpleNamespace(
         context_id=context_id,
         obs_manager=SimpleNamespace(
+            scr_start_time=0.0,
             scr_end_time=1.0,
             obs_policies={URIRef("urn:test:policy"): SimpleNamespace(end_time=3.0)},
             pending_end_deadline=None,
@@ -258,6 +262,42 @@ def test_completed_context_is_retained_during_observation_horizon():
 
     assert node._scenario_contexts == {}
     node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
+
+
+def test_clock_reset_removes_stale_context_without_publishing_it():
+    context_id = uuid4()
+    context = SimpleNamespace(
+        context_id=context_id,
+        obs_manager=SimpleNamespace(
+            scr_start_time=10.0,
+            scr_end_time=20.0,
+            obs_policies={},
+            pending_end_deadline=None,
+        ),
+        scr_rep=object(),
+        end_event_sent=True,
+    )
+    publisher = Mock()
+    node = _node(
+        _scenario_contexts={context_id: context},
+        _scr_lock=threading.Lock(),
+        _remove_context_topic_reg=Mock(),
+        _scr_status_pub=publisher,
+        _schedule_next_scenario=Mock(),
+        get_clock=Mock(
+            return_value=SimpleNamespace(now=Mock(return_value=Time(seconds=1.0)))
+        ),
+        get_logger=Mock(return_value=Mock()),
+    )
+
+    with patch(
+        "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg"
+    ) as to_status:
+        node._status_timer_callback()
+
+    assert node._scenario_contexts == {}
+    to_status.assert_not_called()
+    assert publisher.publish.call_args.args[0].scenarios == []
 
 
 def test_behaviour_result_is_recorded_without_ending_scenario():
@@ -307,6 +347,7 @@ def test_scenario_ends_once_after_pending_observation_deadline():
     context = SimpleNamespace(
         context_id=context_id,
         obs_manager=SimpleNamespace(
+            scr_start_time=0.0,
             pending_end_deadline=3.0,
             scenario_exec=SimpleNamespace(end_event=end_event),
             scr_end_time=None,
