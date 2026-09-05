@@ -15,19 +15,19 @@ obs policy (ns=bdd_exec_ros) fcx-located-before-topic
 }
 obs provider (ns=bdd_exec_ros) detections-3d {
     ros topic: "/obs_policy/detections_3d"
-    type: "vision_msgs/msg/Detection3D"
+    type: "vision_msgs/msg/Detection3DArray"
 }
 observation (ns=bdd_exec_ros) object-pose {
     provider: <detections-3d>
     observes var <tmpl_pickplace.target_object>
     time extractor: py { module: bdd_exec_ros2.observation, attr: header_stamp }
-    entity mapper: py { module: bdd_exec_ros2.executables.mockup_behaviour_node, attr: map_detection3d_entity_mockup }
+    entity mapper: py { module: bdd_exec_ros2.observation, attr: map_detection3d_array_by_uri }
 }
 observation (ns=bdd_exec_ros) workspace-pose {
     provider: <detections-3d>
     observes var <tmpl_pickplace.place_ws>
     time extractor: py { module: bdd_exec_ros2.observation, attr: header_stamp }
-    entity mapper: py { module: bdd_exec_ros2.executables.mockup_behaviour_node, attr: map_detection3d_entity_mockup }
+    entity mapper: py { module: bdd_exec_ros2.observation, attr: map_detection3d_array_by_uri }
 }
 obs policy (ns=bdd_exec_ros) fcx-located-after-detections
     for <tmpl_pickplace.fc-located-after>

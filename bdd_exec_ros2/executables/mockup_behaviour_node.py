@@ -15,7 +15,6 @@ import time
 from random import random
 
 import rclpy
-from bdd_dsl.models.observation import EntityObservation
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import Collision, Event, Trinary, TrinaryStamped
 from coord_dsl.event_loop import reconfig_event_buffers
@@ -25,16 +24,13 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rdf_utils.namespace import URL_SECORO_M
 from rdflib import Graph, Namespace, URIRef
-from vision_msgs.msg import Detection3D
+from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.behaviours.fsm_pickplace import (
     EVENT_URIS,
     EventID,
     StateID,
     create_fsm,
-)
-from bdd_exec_ros2.observation import (
-    map_detection3d_entity_by_dict,
 )
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
@@ -72,16 +68,6 @@ MOCKUP_COLLISION_WORKSPACE_BODY_IDS = {
     NS_M_ENV_SECORO["box2_ws"]: "/spawned/box2",
     NS_M_ENV_SECORO["table"]: "/background/table_low_327",
 }
-
-
-def map_detection3d_entity_mockup(
-    observation: Detection3D,
-    scene_instance: object = None,
-    targets: list[URIRef] | None = None,
-) -> list[EntityObservation]:
-    del scene_instance
-    del targets
-    return map_detection3d_entity_by_dict(observation, MOCKUP_DETECTION3D_ENTITY_URIS)
 
 
 EXPORTED_EVENTS = {
@@ -258,22 +244,24 @@ class MockupBhvNode(Node):
             msg_type=TrinaryStamped, topic=TOPIC_IS_HELD, qos_profile=10
         )
         self.detections_pub = self.create_publisher(
-            msg_type=Detection3D, topic=TOPIC_DETECTIONS_3D, qos_profile=10
+            msg_type=Detection3DArray, topic=TOPIC_DETECTIONS_3D, qos_profile=10
         )
         self.collision_pub = self.create_publisher(
             msg_type=Collision, topic=TOPIC_COLLISION, qos_profile=10
         )
 
-    def _publish_detection(self, entity_uri: URIRef) -> None:
-        detection_id = MOCKUP_ENTITY_DETECTION3D_IDS.get(entity_uri)
-        if detection_id is None:
-            self.get_logger().warning(f"No Detection3D ID for {entity_uri}")
-            return
-        detection = Detection3D()
-        detection.header.stamp = self.get_clock().now().to_msg()
-        detection.id = detection_id
-        detection.bbox.center.orientation.w = 1.0
-        self.detections_pub.publish(detection)
+    def _publish_detections(self, entity_uris: list[URIRef]) -> None:
+        detections = Detection3DArray()
+        detections.header.stamp = self.get_clock().now().to_msg()
+        for entity_uri in entity_uris:
+            if entity_uri not in MOCKUP_ENTITY_DETECTION3D_IDS:
+                self.get_logger().warning(f"No Detection3D ID for {entity_uri}")
+                continue
+            detection = Detection3D()
+            detection.id = str(entity_uri)
+            detection.bbox.center.orientation.w = 1.0
+            detections.detections.append(detection)
+        self.detections_pub.publish(detections)
 
     def _publish_collision(
         self, object_uris: list[URIRef], workspace_uris: list[URIRef]
@@ -373,8 +361,7 @@ class MockupBhvNode(Node):
             response.result.trinary = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
                 goal_handle.succeed()
-                for entity_uri in [*object_uris, *workspace_uris]:
-                    self._publish_detection(entity_uri)
+                self._publish_detections([*object_uris, *workspace_uris])
                 return response
 
             if goal_handle.is_cancel_requested:

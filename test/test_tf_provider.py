@@ -7,6 +7,7 @@ from bdd_dsl.models.urirefs import (
     URI_BDD_TYPE_STRING_ENTITY_MAPPING,
 )
 from geometry_msgs.msg import TransformStamped
+from rclpy.time import Time
 from rdf_utils.models.vocab import (
     URI_OBS_PRED_ENTITY_MAPPER,
     URI_OBS_PRED_PROVIDER,
@@ -62,6 +63,7 @@ def test_provider_discovers_mapper_frames_and_maps_available_transforms():
     ]
     provider._logger = Mock()
     provider._callback_group = None
+    provider._max_age_sec = 1.0
     provider._node = Mock()
     callback = Mock()
 
@@ -72,3 +74,19 @@ def test_provider_discovers_mapper_frames_and_maps_available_transforms():
     assert poses["drawer_handle"].header.frame_id == "base_link"
     assert poses["drawer_handle"].pose.position.x == 1.25
     provider._logger.warning.assert_called_once()
+
+
+def test_provider_omits_stale_transform():
+    transform = TransformStamped()
+    transform.header.stamp = Time(seconds=8.0).to_msg()
+    provider = TfProvider.__new__(TfProvider)
+    provider._buffer = Mock()
+    provider._buffer.lookup_transform.return_value = transform
+    provider._logger = Mock()
+    provider._max_age_sec = 1.0
+    provider._node = Mock()
+    provider._node.get_clock.return_value.now.return_value = Time(seconds=10.0)
+
+    poses = provider.get_poses("base_link", ["drawer_handle"])
+
+    assert poses == {}

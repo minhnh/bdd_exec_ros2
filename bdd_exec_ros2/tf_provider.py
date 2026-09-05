@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from bdd_dsl.models.observation import read_string_entity_mappings
 from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import CallbackGroup
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from rdf_utils.models.vocab import (
@@ -41,8 +42,7 @@ class TfPollingHandle:
         if self._cancelled:
             return
         poses = self._provider.get_poses(self._reference_frame, self._frame_names)
-        if poses:
-            self._callback(poses)
+        self._callback(poses)
 
     def cancel(self) -> None:
         if not self._cancelled:
@@ -53,10 +53,18 @@ class TfPollingHandle:
 class TfProvider:
     """Read the TF frames requested by observation entity mappers."""
 
-    def __init__(self, node: Node, callback_group: CallbackGroup | None = None) -> None:
+    def __init__(
+        self,
+        node: Node,
+        max_age_sec: float = 1.0,
+        callback_group: CallbackGroup | None = None,
+    ) -> None:
+        if max_age_sec <= 0:
+            raise ValueError("TF maximum age must be positive")
         self._node = node
         self._logger = node.get_logger()
         self._callback_group = callback_group
+        self._max_age_sec = max_age_sec
         self._buffer = Buffer(node=node)
         self._listener = TransformListener(self._buffer, node)
 
@@ -75,6 +83,16 @@ class TfProvider:
                     throttle_duration_sec=1.0,
                 )
                 continue
+            stamp = Time.from_msg(transform.header.stamp)
+            if stamp.nanoseconds:
+                age = self._node.get_clock().now() - stamp
+                if not Duration() <= age <= Duration(seconds=self._max_age_sec):
+                    age_sec = age.nanoseconds / 1e9
+                    self._logger.warning(
+                        f"TF '{reference_frame}' to '{frame_name}' is stale ({age_sec:.3f}s old)",
+                        throttle_duration_sec=1.0,
+                    )
+                    continue
             pose = PoseStamped()
             pose.header = transform.header
             pose.pose.position.x = transform.transform.translation.x

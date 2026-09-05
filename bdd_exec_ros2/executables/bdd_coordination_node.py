@@ -213,6 +213,7 @@ class BddCoordNode(Node):
         self.declare_parameter("start_test_topic", "start")
         self.declare_parameter("status_timer_period", 0.5)
         self.declare_parameter("timeout", 5.0)
+        self.declare_parameter("tf_max_age", 1.0)
         self.declare_parameter("status_topic", "status")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
@@ -231,6 +232,13 @@ class BddCoordNode(Node):
         if not isinstance(timeout_sec, float):
             raise TypeError(f"'timeout' not a float, got: {timeout_sec}")
         self.timeout_sec = timeout_sec
+
+        tf_max_age = self.get_parameter("tf_max_age").value
+        if not isinstance(tf_max_age, float) or tf_max_age <= 0:
+            raise ValueError(
+                f"'tf_max_age' must be a positive float, got: {tf_max_age}"
+            )
+        self.tf_max_age = tf_max_age
 
         # Behaviour action server
         server_name = self.get_parameter("bhv_server_name").value
@@ -301,7 +309,11 @@ class BddCoordNode(Node):
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self._tf_provider = (
-            TfProvider(self, callback_group=self._obs_cb_group)
+            TfProvider(
+                self,
+                max_age_sec=self.tf_max_age,
+                callback_group=self._obs_cb_group,
+            )
             if any(self.graph.subjects(RDF.type, URI_ROS_TYPE_TRANSFORM_LISTENER))
             else None
         )
@@ -690,15 +702,15 @@ class BddCoordNode(Node):
     def _update_transform_observation(
         self, context_id: UUID, provider_uri: URIRef, poses: dict[str, PoseStamped]
     ) -> None:
-        if not poses:
-            return
         receipt_stamp = ros_time_to_stamp(self.get_clock().now())
         with self._scr_lock:
             context = self._scenario_contexts.get(context_id)
             if context is None:
                 return
             results = context.obs_manager.update_provider_observation(
-                provider_uri, poses, receipt_stamp
+                provider_uri,
+                poses,
+                receipt_stamp,
             )
         for policy_uri, (updated, reason) in results.items():
             if not updated:

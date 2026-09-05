@@ -27,13 +27,13 @@ from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.time import Time
 from rdflib import URIRef
+from trinary import Unknown
 from vision_msgs.msg import Detection3D, Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
 from bdd_exec_ros2.executables.mockup_behaviour_node import (
     MOCKUP_DETECTION3D_ENTITY_URIS,
     MockupBhvNode,
-    map_detection3d_entity_mockup,
 )
 from bdd_exec_ros2.observation import (
     DetectedEntityPose,
@@ -46,27 +46,8 @@ from bdd_exec_ros2.observation import (
     header_stamp,
     latest_identified_pose_stamp,
     map_detection3d_array_by_uri,
-    map_detection3d_entity_by_dict,
     map_identified_pose_batch,
 )
-
-
-def test_detection3d_adapter_extracts_stamp_and_mapped_position():
-    detection = Detection3D()
-    detection.header.stamp.sec = 3
-    detection.header.stamp.nanosec = 500_000_000
-    detection.id = "tomato_soup_can"
-    detection.bbox.center.position.x = 0.2
-
-    mapped = map_detection3d_entity_mockup(detection)
-
-    assert header_stamp(detection, 99.0) == 3.5
-    assert mapped[0].entity_uri == MOCKUP_DETECTION3D_ENTITY_URIS[detection.id]
-    assert mapped[0].value == (0.2, 0.0, 0.0)
-    detection.id = "unmapped"
-    assert (
-        map_detection3d_entity_by_dict(detection, MOCKUP_DETECTION3D_ENTITY_URIS) == []
-    )
 
 
 def test_detection3d_array_adapter_maps_target_uris_and_bbox_centers():
@@ -125,6 +106,9 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
         footprint_size_xy=(0.24, 0.20),
         allowed_outside_ratio=0.05,
     )
+    result, reason = center.evaluate(samples[:1])
+    assert result is Unknown
+    assert reason == "containment expected 2 inputs, received 1"
     assert center.evaluate(samples)[0] is True
     assert footprint.evaluate(samples)[0] is True
 
@@ -327,7 +311,7 @@ def test_place_behaviour_forwards_workspace_parameter():
     }
 
 
-def test_mockup_publishes_a_stamped_detection_for_a_mapped_entity():
+def test_mockup_publishes_stamped_detection_batch():
     stamp = object()
     publisher = Mock()
     logger = Mock()
@@ -341,14 +325,18 @@ def test_mockup_publishes_a_stamped_detection_for_a_mapped_entity():
         get_logger=Mock(return_value=logger),
     )
 
-    MockupBhvNode._publish_detection(
-        node, MOCKUP_DETECTION3D_ENTITY_URIS["tomato_soup_can"]
+    MockupBhvNode._publish_detections(
+        node,
+        [
+            MOCKUP_DETECTION3D_ENTITY_URIS["tomato_soup_can"],
+            URIRef("urn:test:unknown"),
+        ],
     )
 
-    detection = publisher.publish.call_args.args[0]
-    assert detection.header.stamp is stamp
-    assert detection.id == "tomato_soup_can"
+    detections = publisher.publish.call_args.args[0]
+    assert detections.header.stamp is stamp
+    assert len(detections.detections) == 1
+    detection = detections.detections[0]
+    assert detection.id == str(MOCKUP_DETECTION3D_ENTITY_URIS["tomato_soup_can"])
     assert detection.bbox.center.orientation.w == 1.0
-
-    MockupBhvNode._publish_detection(node, URIRef("urn:test:unknown"))
     logger.warning.assert_called_once()

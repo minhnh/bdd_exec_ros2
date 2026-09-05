@@ -39,7 +39,7 @@ from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 from scipy.spatial.transform import Rotation
 from std_msgs.msg import Header
 from trinary import Trinary, Unknown
-from vision_msgs.msg import Detection3D, Detection3DArray
+from vision_msgs.msg import Detection3DArray
 
 from bdd_exec_ros2.conversions import ros_time_to_stamp
 
@@ -92,16 +92,6 @@ def load_ros_topic_model(graph: Graph, model: ModelBase, **kwargs):
 
     msg_type = get_message(msg_type_str)
     model.set_attr(key=URI_ROS_PRED_TYPE_NAME, val=msg_type)
-
-
-def map_detection3d_entity_by_dict(
-    observation: Detection3D, entity_by_id: Mapping[str, URIRef]
-) -> list[EntityObservation]:
-    entity_uri = entity_by_id.get(observation.id)
-    if entity_uri is None:
-        return []
-    position = observation.bbox.center.position
-    return [EntityObservation(entity_uri, (position.x, position.y, position.z))]
 
 
 def header_stamp(observation: object, receipt_stamp: float) -> float:
@@ -306,7 +296,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         footprint_size_xy: tuple[float, float] | None = None,
         allowed_outside_ratio: float = 0.0,
     ) -> None:
-        super().__init__()
+        super().__init__((Unknown, "containment expected 2 inputs, received 0"))
         if any(size <= 0.0 for size in boundary_size_xy):
             raise ValueError("boundary dimensions must be positive")
         if margin_m < 0.0 or any(2.0 * margin_m >= size for size in boundary_size_xy):
@@ -339,7 +329,10 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         self, observations: list[ObservationStamped]
     ) -> tuple[bool | Trinary, str]:
         if len(observations) != 2:
-            raise ValueError("containment evaluator expects exactly two observations")
+            return (
+                Unknown,
+                f"containment expected 2 inputs, received {len(observations)}",
+            )
         values = [sample.value for sample in observations]
         if not all(isinstance(value, DetectedEntityPose) for value in values):
             raise TypeError("containment evaluator expects detected entity poses")

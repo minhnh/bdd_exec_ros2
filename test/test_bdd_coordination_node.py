@@ -37,6 +37,28 @@ def _node(**attrs):
     return node
 
 
+def test_empty_transform_snapshot_is_forwarded_for_cache_invalidation():
+    context_id = uuid4()
+    provider_uri = URIRef("urn:test:tf-provider")
+    manager = Mock()
+    manager.update_provider_observation.return_value = {}
+    node = _node(
+        _scr_lock=threading.Lock(),
+        _scenario_contexts={context_id: SimpleNamespace(obs_manager=manager)},
+        get_clock=Mock(
+            return_value=SimpleNamespace(now=Mock(return_value=Time(seconds=2.0)))
+        ),
+    )
+
+    node._update_transform_observation(context_id, provider_uri, {})
+
+    manager.update_provider_observation.assert_called_once_with(
+        provider_uri,
+        {},
+        2.0,
+    )
+
+
 def test_context_free_event_is_recorded_for_each_active_scenario():
     context_ids = (uuid4(), uuid4())
     managers = (Mock(), Mock())
@@ -525,6 +547,7 @@ def test_context_cleanup_destroys_simulation_provider_timer():
         _topic_fpolicy_reg={},
         _topic_observation_reg={},
         _simulation_observation_handles={key: handle},
+        _transform_observation_handles={},
     )
 
     node._remove_context_topic_reg(context_id)
