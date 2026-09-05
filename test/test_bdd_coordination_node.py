@@ -281,6 +281,7 @@ def test_clock_reset_removes_stale_context_without_publishing_it():
     node = _node(
         _scenario_contexts={context_id: context},
         _scr_lock=threading.Lock(),
+        _use_sim_time=True,
         _remove_context_topic_reg=Mock(),
         _scr_status_pub=publisher,
         _schedule_next_scenario=Mock(),

@@ -65,9 +65,10 @@ from rdf_utils.models.vocab import (
     URI_ROS_PRED_TYPE_NAME,
     URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER,
     URI_ROS_TYPE_TOPIC,
+    URI_ROS_TYPE_TRANSFORM_LISTENER,
 )
 from rdf_utils.uri import try_expand_curie
-from rdflib import Graph, URIRef
+from rdflib import RDF, Graph, URIRef
 from rdflib.namespace import NamespaceManager
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 from scene_dsl.rdf_parser.sensors import get_update_rate
@@ -90,6 +91,7 @@ from bdd_exec_ros2.observation import (
     load_ros_topic_model,
 )
 from bdd_exec_ros2.sim_interfaces import PosePollingHandle, SimInterface
+from bdd_exec_ros2.tf_provider import TfPollingHandle, TfProvider
 
 __DEFAULT_NODE_NAME = "test_coordinator"
 
@@ -168,6 +170,7 @@ class ScenarioContext:
     variation_params: dict[URIRef, Any]
     scene_inst: SceneInstanceModel
     simulation_observations: dict[URIRef, tuple[float, dict[URIRef, URIRef]]]
+    transform_observations: dict[URIRef, float]
     # Useful for handling timeout, cancelation
     goal_handle: ClientGoalHandle | None = None
     end_event_sent: bool = False
@@ -195,6 +198,8 @@ class BddCoordNode(Node):
     _topic_observation_reg: dict[tuple[str, type], dict[UUID, set[URIRef]]]
     _observation_subs: dict[tuple[str, type], Subscription]
     _simulation_observation_handles: dict[tuple[UUID, URIRef], PosePollingHandle]
+    _transform_observation_handles: dict[tuple[UUID, URIRef], TfPollingHandle]
+    _tf_provider: TfProvider | None
 
     _action_client: ActionClient
     _evt_pub: Publisher
@@ -295,6 +300,11 @@ class BddCoordNode(Node):
             )
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
+        self._tf_provider = (
+            TfProvider(self, callback_group=self._obs_cb_group)
+            if any(self.graph.subjects(RDF.type, URI_ROS_TYPE_TRANSFORM_LISTENER))
+            else None
+        )
         self._ns_manager = self.graph.namespace_manager
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
@@ -328,6 +338,7 @@ class BddCoordNode(Node):
         self._topic_observation_reg = {}
         self._observation_subs = {}
         self._simulation_observation_handles = {}
+        self._transform_observation_handles = {}
 
     def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
         mode_value = self.get_parameter("scene_setup_mode").value
@@ -381,6 +392,10 @@ class BddCoordNode(Node):
             if key[0] == context_id:
                 handle.cancel()
                 del self._simulation_observation_handles[key]
+        for key, handle in tuple(self._transform_observation_handles.items()):
+            if key[0] == context_id:
+                handle.cancel()
+                del self._transform_observation_handles[key]
 
     def _update_observation(self, topic_key: tuple[str, type], msg: Any) -> None:
         receipt_stamp = ros_time_to_stamp(self.get_clock().now())
@@ -541,6 +556,7 @@ class BddCoordNode(Node):
         scene_inst = obs_manager.scenario_exec.scene_instance
 
         simulation_rates = {}
+        transform_configs = {}
         for provider_uri, provider in obs_manager.providers.items():
             if URI_ROS_TYPE_TOPIC in provider.types:
                 load_ros_topic_model(graph=self.graph, model=provider)
@@ -551,6 +567,8 @@ class BddCoordNode(Node):
                 )
             elif URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER in provider.types:
                 simulation_rates[provider_uri] = get_update_rate(self.graph, provider)
+            elif URI_ROS_TYPE_TRANSFORM_LISTENER in provider.types:
+                transform_configs[provider_uri] = get_update_rate(self.graph, provider)
 
         scr_rep = ScenarioVariantRep(
             scr_var=scr_var,
@@ -566,6 +584,7 @@ class BddCoordNode(Node):
             scr_rep=scr_rep,
             scene_inst=scene_inst,
             simulation_observations={},
+            transform_observations={},
         )
         for provider_uri, rate in simulation_rates.items():
             modelled_elem_by_obs_target = {}
@@ -589,6 +608,7 @@ class BddCoordNode(Node):
                 rate,
                 modelled_elem_by_obs_target,
             )
+        context.transform_observations.update(transform_configs)
         return context
 
     def _update_simulation_observation(
@@ -667,6 +687,45 @@ class BddCoordNode(Node):
                 )
             )
 
+    def _update_transform_observation(
+        self, context_id: UUID, provider_uri: URIRef, poses: dict[str, PoseStamped]
+    ) -> None:
+        if not poses:
+            return
+        receipt_stamp = ros_time_to_stamp(self.get_clock().now())
+        with self._scr_lock:
+            context = self._scenario_contexts.get(context_id)
+            if context is None:
+                return
+            results = context.obs_manager.update_provider_observation(
+                provider_uri, poses, receipt_stamp
+            )
+        for policy_uri, (updated, reason) in results.items():
+            if not updated:
+                self.get_logger().warning(
+                    f"transform observation policy '{policy_uri.n3(self._ns_manager)}' "
+                    f"rejected provider '{provider_uri.n3(self._ns_manager)}': {reason}",
+                    throttle_duration_sec=1.0,
+                )
+
+    def _activate_transform_observations(self, context: ScenarioContext) -> None:
+        if context.transform_observations and self._tf_provider is None:
+            raise RuntimeError("transform observations require a TF provider")
+        if self._tf_provider is None:
+            return
+        for provider_uri, rate in context.transform_observations.items():
+            key = (context.context_id, provider_uri)
+            self._transform_observation_handles[key] = (
+                self._tf_provider.start_pose_polling(
+                    self.graph,
+                    provider_uri,
+                    rate,
+                    lambda poses, cid=context.context_id, pid=provider_uri: (
+                        self._update_transform_observation(cid, pid, poses)
+                    ),
+                )
+            )
+
     def _start_scenario_variant(
         self, context: ScenarioContext, scr_var: ScenarioVariantModel
     ) -> None:
@@ -680,6 +739,7 @@ class BddCoordNode(Node):
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
         self._activate_simulation_observations(context)
+        self._activate_transform_observations(context)
 
         # Publish scenario start event
         self._send_event(
