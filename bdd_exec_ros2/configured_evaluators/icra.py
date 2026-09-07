@@ -3,7 +3,6 @@ from rdflib import URIRef
 from bdd_exec_ros2.observation import (
     PlanarContainmentEvaluator,
     WrenchForceNormWithinLimitEvaluator,
-    WrenchPeakForceNormWithinLimitEvaluator,
     WrenchRmsForceNormWithinLimitEvaluator,
 )
 
@@ -43,12 +42,8 @@ robot_ws_footprint_inside = PlanarContainmentEvaluator(
 force_instantaneous_within_limit = WrenchForceNormWithinLimitEvaluator(
     _COMPLIANCE_LIMIT_N
 )
-force_peak_within_limit = WrenchPeakForceNormWithinLimitEvaluator(_COMPLIANCE_LIMIT_N)
 force_rms_within_limit = WrenchRmsForceNormWithinLimitEvaluator(_COMPLIANCE_LIMIT_N)
 estimated_force_instantaneous_within_limit = WrenchForceNormWithinLimitEvaluator(
-    _COMPLIANCE_LIMIT_N
-)
-estimated_force_peak_within_limit = WrenchPeakForceNormWithinLimitEvaluator(
     _COMPLIANCE_LIMIT_N
 )
 estimated_force_rms_within_limit = WrenchRmsForceNormWithinLimitEvaluator(

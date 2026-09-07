@@ -40,7 +40,6 @@ from bdd_exec_ros2.observation import (
     PlanarContainmentEvaluator,
     TargetsDoNotCollideEvaluator,
     WrenchForceNormWithinLimitEvaluator,
-    WrenchPeakForceNormWithinLimitEvaluator,
     WrenchRmsForceNormWithinLimitEvaluator,
     collision_stamp,
     header_stamp,
@@ -184,7 +183,7 @@ def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
         header_stamp(object(), 42.0)
 
 
-def test_peak_and_rms_force_evaluators_accumulate_and_warm_up():
+def test_rms_force_evaluator_accumulates_and_warms_up():
     message = WrenchStamped()
     observation_uri = URIRef("urn:test:wrench-observation")
     provider_uri = URIRef("urn:test:wrench-provider")
@@ -192,10 +191,6 @@ def test_peak_and_rms_force_evaluators_accumulate_and_warm_up():
     def sample(stamp: float, force: float) -> ObservationStamped:
         message.wrench.force.x = force
         return ObservationStamped(observation_uri, provider_uri, stamp, message)
-
-    peak = WrenchPeakForceNormWithinLimitEvaluator()
-    assert peak.evaluate([sample(0.0, 10.0)])[0] is True
-    assert peak.evaluate([sample(0.1, 50.0)])[0] is False
 
     rms = WrenchRmsForceNormWithinLimitEvaluator()
     assert rms.evaluate([sample(0.0, 10.0)])[0] is None

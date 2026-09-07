@@ -228,25 +228,6 @@ def _wrench_force_norm(observations: list[ObservationStamped]) -> float:
     return hypot(force.x, force.y, force.z)
 
 
-class WrenchPeakForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
-    def __init__(self, max_force_n: float = 45.0) -> None:
-        super().__init__()
-        self.max_force_n = max_force_n
-        self.peak_force_n: float | None = None
-
-    def _evaluate_samples(
-        self, observations: list[ObservationStamped]
-    ) -> tuple[bool, str]:
-        norm = _wrench_force_norm(observations)
-        self.peak_force_n = max(norm, self.peak_force_n or 0.0)
-        within_limit = self.peak_force_n <= self.max_force_n
-        relation = "within" if within_limit else "exceeds"
-        return (
-            within_limit,
-            f"peak force norm {self.peak_force_n:.3f} N {relation} {self.max_force_n:.3f} N limit",
-        )
-
-
 class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
     def __init__(self, max_force_n: float = 15.0, window_seconds: float = 0.25) -> None:
         super().__init__()
