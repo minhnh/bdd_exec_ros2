@@ -33,7 +33,7 @@ from bdd_exec_ros2.executables.bdd_coordination_node import (
 
 def _node(**attrs):
     node = BddCoordNode.__new__(BddCoordNode)
-    node.__dict__.update(attrs)
+    node.__dict__.update({"_user_story": None, **attrs})
     return node
 
 
@@ -623,3 +623,32 @@ def test_simulation_provider_reports_policy_rejection():
     logger.warning.assert_called_once()
     assert policy_uri.n3(graph.namespace_manager) in logger.warning.call_args.args[0]
     assert "not active" in logger.warning.call_args.args[0]
+
+
+def test_configured_story_does_not_start_imported_reference_scenarios():
+    story = URIRef("urn:test:selected-story")
+    selected = URIRef("urn:test:selected-variant")
+    loader = Mock()
+    loader.get_us_scenario_variants.return_value = {
+        URIRef("urn:test:reference-story"): [URIRef("urn:test:reference-variant")],
+        story: [selected],
+    }
+    loader.load_scenario_variant.return_value = SimpleNamespace(task_variation=object())
+    node = _node(
+        _user_story=story,
+        _scene_setup_mode=SceneSetupMode.NONE,
+        us_loader=loader,
+        graph=object(),
+        _create_scenario_context=Mock(),
+        _start_scenario_variant=Mock(),
+        _schedule_next_scenario=Mock(),
+    )
+    with patch(
+        "bdd_exec_ros2.executables.bdd_coordination_node.get_task_var_dicts",
+        return_value=[{}],
+    ):
+        node.start_test_cb(None)
+    loader.load_scenario_variant.assert_called_once_with(
+        full_graph=node.graph, variant_id=selected
+    )
+    node._start_scenario_variant.assert_called_once()

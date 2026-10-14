@@ -217,6 +217,7 @@ class BddCoordNode(Node):
         self.declare_parameter("status_topic", "status")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
+        self.declare_parameter("user_story", "")
         self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE.value)
         self.declare_parameter("simulation_service_namespace", "/")
         self.declare_parameter("world_entity_name", "world")
@@ -319,6 +320,15 @@ class BddCoordNode(Node):
         )
         self._ns_manager = self.graph.namespace_manager
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
+        user_story = self.get_parameter("user_story").value
+        if not isinstance(user_story, str):
+            raise TypeError("'user_story' must be a string")
+        self._user_story = URIRef(user_story) if user_story else None
+        if (
+            self._user_story is not None
+            and self._user_story not in self.us_loader.get_us_scenario_variants()
+        ):
+            raise ValueError(f"unknown user_story: {user_story}")
 
         self._scene_setup_mode, self._sim_interface = self._resolve_scene_setup()
 
@@ -908,7 +918,9 @@ class BddCoordNode(Node):
                     return
 
         us_var_dict = self.us_loader.get_us_scenario_variants()
-        for scr_var_set in us_var_dict.values():
+        for story_uri, scr_var_set in us_var_dict.items():
+            if self._user_story is not None and story_uri != self._user_story:
+                continue
             for scr_var_id in scr_var_set:
                 scr_var = self.us_loader.load_scenario_variant(
                     full_graph=self.graph, variant_id=scr_var_id

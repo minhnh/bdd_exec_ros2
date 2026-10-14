@@ -45,6 +45,7 @@ from bdd_exec_ros2.observation import (
     header_stamp,
     latest_identified_pose_stamp,
     map_detection3d_array_by_uri,
+    map_identified_entity_poses,
     map_identified_pose_batch,
 )
 
@@ -215,6 +216,11 @@ def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():
         first: (0.0, 0.0, 0.0),
         second: (0.0, 0.0, 0.0),
     }
+    poses[first].pose.orientation.x = 0.5
+    full = map_identified_entity_poses(poses, targets=[first])
+    assert [sample.entity_uri for sample in full] == [first]
+    assert isinstance(full[0].value, DetectedEntityPose)
+    assert full[0].value.pose == poses[first].pose
     poses[first].header.stamp = Time().to_msg()
     assert latest_identified_pose_stamp(poses, receipt_stamp) == receipt_stamp
 

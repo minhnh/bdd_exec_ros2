@@ -67,6 +67,10 @@ To run the mockup setup:
 from RDF graphs or RobBDD sources and, when triggered, sends a goal for each scenario variation to a
 [behaviour action server](https://github.com/minhnh/bdd_ros2_interfaces/blob/main/action/Behaviour.action).
 
+`user_story` optionally selects one full UserStory URI from the loaded graph.
+Leave it empty to run all stories; use it when imported contracts also contain
+reference scenarios that should not run in this execution setup.
+
 By default, `scene_setup_mode` is `none` and variations retain their concurrent execution behavior.
 Set it to `simulation` to prepare variations sequentially through `SimInterface`: the coordinator
 loads or resets the exact scene instance, spawns its invariant and variable-selected elements, and

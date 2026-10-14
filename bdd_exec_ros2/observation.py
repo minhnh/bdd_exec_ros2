@@ -146,6 +146,21 @@ def map_identified_pose_batch(
     ]
 
 
+def map_identified_entity_poses(
+    poses: Mapping[URIRef, PoseStamped],
+    scene_instance: SceneInstanceModel | None = None,
+    targets: list[URIRef] | None = None,
+) -> list[EntityObservation]:
+    """Preserve full poses for evaluators that use orientation or footprint geometry."""
+    del scene_instance
+    selected = set(targets) if targets is not None else None
+    return [
+        EntityObservation(uri, DetectedEntityPose(uri, pose.pose))
+        for uri, pose in poses.items()
+        if selected is None or uri in selected
+    ]
+
+
 def collision_stamp(observation: Collision, receipt_stamp: float) -> float:
     stamp = ros_time_to_stamp(Time.from_msg(observation.stamp))
     return stamp or receipt_stamp
