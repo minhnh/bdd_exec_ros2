@@ -75,6 +75,7 @@ from scene_dsl.rdf_parser.sensors import get_update_rate
 from std_msgs.msg import Empty as EmptyMsg
 from unique_identifier_msgs.msg import UUID as UUIDMsg
 
+from bdd_exec_ros2.clock import SimulationClockSync
 from bdd_exec_ros2.conversions import (
     TRINARY_NAMES,
     format_time_msg,
@@ -186,6 +187,7 @@ class BddCoordNode(Node):
     _scene_setup_mode: SceneSetupMode
     _scene_setup_active: bool
     _sim_interface: SimInterface | None
+    _sim_clock: SimulationClockSync | None
     _pending_scenarios: deque[tuple[ScenarioVariantModel, dict[URIRef, Any]]]
     _scenario_contexts: dict[UUID, ScenarioContext]
     _scr_lock: threading.Lock
@@ -361,6 +363,67 @@ class BddCoordNode(Node):
         self._observation_subs = {}
         self._simulation_observation_handles = {}
         self._transform_observation_handles = {}
+        self._sim_clock = None
+        if self._use_sim_time:
+            self._sim_clock = SimulationClockSync(self, on_reset=self._on_clock_reset)
+
+    def destroy_node(self):
+        if self._sim_clock is not None:
+            self._sim_clock.close()
+        return super().destroy_node()
+
+    def _on_clock_reset(self, previous_time_ns: int):
+        context_ids = tuple(
+            context_id
+            for context_id, context in self._scenario_contexts.items()
+            if context.obs_manager.scr_start_time is not None
+        )
+        if context_ids:
+            # Defer work outside the ROS clock callback and preserve the reset-time IDs.
+            executor = self.executor
+            if executor is None:
+                raise RuntimeError("No executor to handle clock reset")
+            executor.create_task(
+                self._handle_clock_reset, context_ids, previous_time_ns
+            )
+
+    def _handle_clock_reset(self, context_ids: tuple[UUID, ...], previous_time_ns: int):
+        now = Time(nanoseconds=previous_time_ns)
+        stamp = ros_time_to_stamp(now)
+        status = ScenarioStatusList(stamp=now.to_msg())
+        with self._scr_lock:
+            for context_id in context_ids:
+                context = self._scenario_contexts.get(context_id)
+                if context is None or context.obs_manager.scr_start_time is None:
+                    continue
+                manager = context.obs_manager
+                manager.update_bhv_result(
+                    TrinaryStamped(
+                        stamp=stamp,
+                        trinary=False,
+                        reason="simulation clock reset during scenario",
+                    )
+                )
+                manager.on_event(manager.scenario_exec.end_event, stamp)
+                status.scenarios.append(
+                    to_scenario_status_msg(
+                        ctx_id=context_id,
+                        obs_manager=manager,
+                        scr_rep=context.scr_rep,
+                        now=now,
+                        trinaries_policy=trin_policy_and,
+                    )
+                )
+                if context.goal_handle is not None:
+                    context.goal_handle.cancel_goal_async()
+                self._remove_context_topic_reg(context_id=context_id)
+                del self._scenario_contexts[context_id]
+            if status.scenarios:
+                self._pending_scenarios.clear()
+                self._scr_status_pub.publish(status)
+                raise RuntimeError(
+                    "Simulation clock reset after scenario start; active scenarios failed and Behaviour cancellation requested"
+                )
 
     def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
         mode_value = self.get_parameter("scene_setup_mode").value
@@ -467,7 +530,11 @@ class BddCoordNode(Node):
                 self.get_logger().warning(
                     f"Trinary [{trin_rep}] from {topic_name} has no scenario context; forwarding to all active scenarios"
                 )
-                context_ids = tuple(self._scenario_contexts)
+                context_ids = tuple(
+                    context_id
+                    for context_id, context in self._scenario_contexts.items()
+                    if context.obs_manager.scr_start_time is not None
+                )
             elif ctx_uuid not in self._scenario_contexts:
                 self.get_logger().error(
                     f"Trinary [{trin_rep}] from {topic_name}: Scenario context '{ctx_uuid.hex}' not found"
@@ -813,10 +880,14 @@ class BddCoordNode(Node):
                     )
 
                 try:
+                    if self._use_sim_time:
+                        self._sim_clock.prepare_wait()
                     await self._sim_interface.setup_scene(
                         context.scene_inst,
                         additional_elements=additional_elements,
                     )
+                    if self._use_sim_time:
+                        await self._sim_clock.wait_for_progress(self.timeout_sec)
                 except Exception as exc:  # noqa: BLE001 - skip failed setup and continue
                     with self._scr_lock:
                         self._remove_context_topic_reg(context.context_id)
@@ -824,6 +895,9 @@ class BddCoordNode(Node):
                         f"Scene setup failed for '{scr_var.id}': {exc}"
                     )
                     continue
+                finally:
+                    if self._use_sim_time:
+                        self._sim_clock.clear_wait()
 
                 self._start_scenario_variant(context, scr_var)
                 break
@@ -850,19 +924,12 @@ class BddCoordNode(Node):
             finished_ids = set()
             for ctx_id, scr_ctx in self._scenario_contexts.items():
                 if (
-                    scr_ctx.obs_manager.scr_start_time is not None
+                    self._use_sim_time
+                    and scr_ctx.obs_manager.scr_start_time is not None
                     and now_stamp < scr_ctx.obs_manager.scr_start_time
                 ):
-                    # this is needed to clear scenarios after a simulation reset
-                    # since clock would again start from 0
-                    if not self._use_sim_time:
-                        raise RuntimeError(
-                            f"not using simulation time but now ({now_stamp}) < scenario start"
-                            f" ({scr_ctx.obs_manager.scr_start_time}) for '{scr_ctx.context_id}'"
-                        )
-                    finished_ids.add(ctx_id)
+                    # The queued reset handler publishes termination on the old timeline.
                     continue
-
                 if (
                     not scr_ctx.end_event_sent
                     and (end_deadline := scr_ctx.obs_manager.pending_end_deadline)
@@ -955,7 +1022,11 @@ class BddCoordNode(Node):
                 self.get_logger().warning(
                     f"Event [{evt_rep}] has no scenario context; forwarding to all active scenarios"
                 )
-                context_ids = tuple(self._scenario_contexts)
+                context_ids = tuple(
+                    context_id
+                    for context_id, context in self._scenario_contexts.items()
+                    if context.obs_manager.scr_start_time is not None
+                )
             elif evt_ctx_uuid not in self._scenario_contexts:
                 self.get_logger().error(
                     f"Callback for event [{evt_rep}]: Scenario context '{evt_ctx_uuid.hex}' not found"
@@ -976,8 +1047,10 @@ class BddCoordNode(Node):
 
         with self._scr_lock:
             if context_id not in self._scenario_contexts:
-                self.get_logger().error(
-                    f"Goal response callback received unknown context ID: {context_id}"
+                if goal_handle.accepted:
+                    goal_handle.cancel_goal_async()
+                self.get_logger().warning(
+                    f"Goal response for retired scenario {context_id}; canceling accepted goal"
                 )
                 return
 

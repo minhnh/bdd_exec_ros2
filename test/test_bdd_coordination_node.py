@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
+import pytest
 from bdd_ros2_interfaces.msg import Event, ScenarioStatus
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
@@ -33,7 +34,7 @@ from bdd_exec_ros2.executables.bdd_coordination_node import (
 
 def _node(**attrs):
     node = BddCoordNode.__new__(BddCoordNode)
-    node.__dict__.update({"_user_story": None, **attrs})
+    node.__dict__.update({"_user_story": None, "_use_sim_time": False, **attrs})
     return node
 
 
@@ -286,41 +287,59 @@ def test_completed_context_is_retained_during_observation_horizon():
     node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
 
 
-def test_clock_reset_removes_stale_context_without_publishing_it():
+def test_clock_reset_without_scene_setup_fails_and_cancels_active_scenario():
     context_id = uuid4()
+    manager, goal, publisher = Mock(), Mock(), Mock()
     context = SimpleNamespace(
-        context_id=context_id,
-        obs_manager=SimpleNamespace(
-            scr_start_time=10.0,
-            scr_end_time=20.0,
-            obs_policies={},
-            pending_end_deadline=None,
-        ),
-        scr_rep=object(),
-        end_event_sent=True,
+        context_id=context_id, obs_manager=manager, goal_handle=goal, scr_rep=object()
     )
-    publisher = Mock()
     node = _node(
+        _scene_setup_mode=SceneSetupMode.NONE,
         _scenario_contexts={context_id: context},
         _scr_lock=threading.Lock(),
-        _use_sim_time=True,
+        _pending_scenarios=deque([object()]),
         _remove_context_topic_reg=Mock(),
         _scr_status_pub=publisher,
-        _schedule_next_scenario=Mock(),
-        get_clock=Mock(
-            return_value=SimpleNamespace(now=Mock(return_value=Time(seconds=1.0)))
-        ),
         get_logger=Mock(return_value=Mock()),
     )
-
-    with patch(
-        "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg"
-    ) as to_status:
-        node._status_timer_callback()
-
+    with (
+        patch(
+            "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg",
+            return_value=ScenarioStatus(),
+        ),
+        pytest.raises(RuntimeError, match="clock reset after scenario start"),
+    ):
+        node._handle_clock_reset((context_id,), 10_000_000_000)
     assert node._scenario_contexts == {}
-    to_status.assert_not_called()
-    assert publisher.publish.call_args.args[0].scenarios == []
+    assert not node._pending_scenarios
+    result = manager.update_bhv_result.call_args.args[0]
+    assert result.trinary is False and "clock reset" in result.reason
+    goal.cancel_goal_async.assert_called_once()
+    assert len(publisher.publish.call_args.args[0].scenarios) == 1
+    node._remove_context_topic_reg.assert_called_once_with(context_id=context_id)
+
+
+def test_clock_reset_only_affects_contexts_active_at_reset():
+    old_id, new_id = uuid4(), uuid4()
+    node = _node(
+        _scenario_contexts={new_id: object()},
+        _scr_lock=threading.Lock(),
+        _scr_status_pub=Mock(),
+    )
+    node._handle_clock_reset((old_id,), 10_000_000_000)
+    assert list(node._scenario_contexts) == [new_id]
+    node._scr_status_pub.publish.assert_not_called()
+
+
+def test_goal_accepted_after_context_retirement_is_cancelled():
+    goal = Mock(accepted=True)
+    node = _node(
+        _scenario_contexts={},
+        _scr_lock=threading.Lock(),
+        get_logger=Mock(return_value=Mock()),
+    )
+    node.bhv_goal_resp_cb(Mock(result=Mock(return_value=goal)), uuid4())
+    goal.cancel_goal_async.assert_called_once()
 
 
 def test_behaviour_result_is_recorded_without_ending_scenario():
@@ -652,3 +671,62 @@ def test_configured_story_does_not_start_imported_reference_scenarios():
         full_graph=node.graph, variant_id=selected
     )
     node._start_scenario_variant.assert_called_once()
+
+
+def test_clock_reset_ignores_context_without_start_time():
+    context_id = uuid4()
+    context = SimpleNamespace(obs_manager=SimpleNamespace(scr_start_time=None))
+    executor = Mock()
+    node = _node(_scenario_contexts={context_id: context}, executor=executor)
+    node._on_clock_reset(10_000_000_000)
+    executor.create_task.assert_not_called()
+    assert node._scenario_contexts[context_id] is context
+
+
+def test_coordinator_waits_for_reset_clock_after_scene_setup(monkeypatch):
+    from rclpy.clock import ROSClock
+
+    from bdd_exec_ros2.clock import SimulationClockSync
+
+    monkeypatch.setattr("bdd_exec_ros2.clock.Future", asyncio.Future)
+
+    async def run():
+        clock = ROSClock()
+        clock._set_ros_time_is_active(True)
+        clock.set_ros_time_override(Time(seconds=100))
+        clock_node = SimpleNamespace(
+            get_clock=lambda: clock,
+            create_timer=lambda *args, **kwargs: object(),
+            destroy_timer=Mock(),
+        )
+        sync = SimulationClockSync(clock_node)
+        context = SimpleNamespace(context_id=uuid4(), scene_inst=object())
+        variant = SimpleNamespace(id=URIRef("urn:test:variant"), scene=object())
+        node = _node(
+            _use_sim_time=True,
+            _sim_clock=sync,
+            timeout_sec=1,
+            _sim_interface=SimpleNamespace(setup_scene=AsyncMock(return_value={})),
+            _pending_scenarios=deque([(variant, {})]),
+            _scenario_contexts={},
+            _scr_lock=threading.Lock(),
+            _scene_setup_active=True,
+            _create_scenario_context=Mock(return_value=context),
+            _start_scenario_variant=Mock(),
+            _schedule_next_scenario=Mock(),
+        )
+        try:
+            setup = asyncio.create_task(node._prepare_next_scenario())
+            await asyncio.sleep(0)
+            node._sim_interface.setup_scene.assert_awaited_once()
+            clock.set_ros_time_override(Time(seconds=101))
+            await asyncio.sleep(0)
+            node._start_scenario_variant.assert_not_called()
+            clock.set_ros_time_override(Time())
+            clock.set_ros_time_override(Time(seconds=0.1))
+            await setup
+            node._start_scenario_variant.assert_called_once_with(context, variant)
+        finally:
+            sync.close()
+
+    asyncio.run(run())
