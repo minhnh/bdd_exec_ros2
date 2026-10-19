@@ -74,8 +74,15 @@ reference scenarios that should not run in this execution setup.
 By default, `scene_setup_mode` is `none` and variations retain their concurrent execution behavior.
 Set it to `simulation` to prepare variations sequentially through `SimInterface`: the coordinator
 loads or resets the exact scene instance, spawns its invariant and variable-selected elements, and
-starts the behaviour only after setup succeeds. `simulation_service_namespace` defaults to `/`, and
-`world_entity_name` defaults to `world`.
+starts the behaviour only after setup succeeds. `simulation_service_namespace` defaults
+to `/`, and `world_entity_name` defaults to `world`.
+
+With `use_sim_time=true`, the coordinator:
+
+- Waits for the reset clock to advance after simulation-backed scene setup, with a bounded timeout.
+- Fails active scenarios, requests Behaviour cancellation, and raises an error
+  if time jumps backward after scenario start. Restart the coordinator afterward.
+  This also applies with `scene_setup_mode=none`.
 
 The complete observation-provider contract, `ObservationManager` API, evaluator forms, and
 simulation polling lifecycle are documented in the
