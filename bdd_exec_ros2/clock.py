@@ -13,7 +13,7 @@ from rclpy.task import Future
 
 
 class SimulationClockSync:
-    """Report backward jumps and optionally await reset followed by progress.
+    """Report backward jumps and optionally await post-setup clock progress.
 
     Call prepare_wait() before setup, wait_for_progress() afterward, and
     clear_wait() in finally. Monitoring remains active until close().
@@ -25,7 +25,6 @@ class SimulationClockSync:
         self._clock = node.get_clock()
         self._future: Future | None = None
         self._timer = None
-        self._reset_seen = False
         self._jump = self._clock.create_jump_callback(
             JumpThreshold(
                 min_forward=Duration(nanoseconds=1),
@@ -36,12 +35,11 @@ class SimulationClockSync:
         )
 
     def prepare_wait(self):
-        """Create one setup wait and start recording reset evidence."""
+        """Create one setup wait before scene setup."""
         if self._jump is None:
             raise RuntimeError("Clock synchronization is closed")
         if self._future is not None:
             raise RuntimeError("Call clear_wait() before preparing another clock wait")
-        self._reset_seen = False
         self._future = Future()
 
     def clear_wait(self):
@@ -56,21 +54,18 @@ class SimulationClockSync:
     def _on_jump(self, jump):
         future = self._future
         if jump.delta.nanoseconds < 0:
-            if future is not None:
-                self._reset_seen = True
             if self._on_reset is not None:
                 self._on_reset(self._clock.now().nanoseconds - jump.delta.nanoseconds)
         elif (
             jump.delta.nanoseconds > 0
             and self._timer is not None
-            and self._reset_seen
             and future is not None
             and not future.done()
         ):
             future.set_result(None)
 
     def wait_for_progress(self, timeout: float) -> Future:
-        """Await a post-setup forward update after an observed backward reset."""
+        """Await the next forward clock update after scene setup."""
         future = self._future
         if self._jump is None:
             raise RuntimeError("Clock synchronization is closed")
@@ -83,7 +78,7 @@ class SimulationClockSync:
             if not future.done():
                 future.set_exception(
                     TimeoutError(
-                        f"scene clock did not reset and advance within {timeout}s after starting simulation"
+                        f"scene clock did not advance within {timeout}s after starting simulation"
                     )
                 )
 

@@ -79,7 +79,7 @@ to `/`, and `world_entity_name` defaults to `world`.
 
 With `use_sim_time=true`, the coordinator:
 
-- Waits for the reset clock to advance after simulation-backed scene setup, with a bounded timeout.
+- Waits for clock progress after simulation-backed scene setup, with a bounded timeout in case reset is detected.
 - Fails active scenarios, requests Behaviour cancellation, and raises an error
   if time jumps backward after scenario start. Restart the coordinator afterward.
   This also applies with `scene_setup_mode=none`.

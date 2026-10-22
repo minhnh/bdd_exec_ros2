@@ -30,36 +30,41 @@ def clock_wait():
 
 
 @pytest.mark.parametrize("reset_during_setup", [False, True])
-def test_wait_requires_reset_and_post_setup_progress(clock_wait, reset_during_setup):
+def test_wait_requires_post_setup_progress(clock_wait, reset_during_setup):
     sync, clock, _, destroyed, resets = clock_wait
     sync.prepare_wait()
     if reset_during_setup:
         clock.set_ros_time_override(RosTime())
-        clock.set_ros_time_override(RosTime(seconds=0.05))
+    setup_time = 0.05 if reset_during_setup else 101
+    clock.set_ros_time_override(RosTime(seconds=setup_time))
     future = sync.wait_for_progress(1)
     assert not future.done()  # Progress during setup cannot complete the wait.
-    if not reset_during_setup:
-        clock.set_ros_time_override(RosTime(seconds=101))
-        assert not future.done()
-        clock.set_ros_time_override(RosTime())
-        assert not future.done()
-    clock.set_ros_time_override(RosTime(seconds=0.1))
+    clock.set_ros_time_override(RosTime(seconds=setup_time + 0.1))
     assert future.done() and future.result() is None
-    assert resets == [(100 if reset_during_setup else 101) * 1_000_000_000]
+    assert resets == ([100_000_000_000] if reset_during_setup else [])
     sync.clear_wait()
     assert len(destroyed) == 1
 
 
 @pytest.mark.parametrize("initial_time", [0, 0.01])
-def test_zero_or_near_zero_does_not_establish_reset(clock_wait, initial_time):
-    sync, clock, callbacks, destroyed, _ = clock_wait
+def test_wait_accepts_progress_from_zero_or_near_zero(clock_wait, initial_time):
+    sync, clock, _, _, resets = clock_wait
     clock.set_ros_time_override(RosTime(seconds=initial_time))
+    resets.clear()
     sync.prepare_wait()
     future = sync.wait_for_progress(1)
     clock.set_ros_time_override(RosTime(seconds=0.02))
+    assert future.done() and future.result() is None
+    assert resets == []
+
+
+def test_wait_times_out_without_progress(clock_wait):
+    sync, _, callbacks, destroyed, _ = clock_wait
+    sync.prepare_wait()
+    future = sync.wait_for_progress(1)
     assert not future.done()
     callbacks[-1]()
-    with pytest.raises(TimeoutError, match="scene clock"):
+    with pytest.raises(TimeoutError, match="scene clock did not advance"):
         future.result()
     sync.clear_wait()
     sync.clear_wait()
@@ -81,6 +86,7 @@ def test_wait_lifecycle_and_old_timeout(clock_wait):
     with pytest.raises(RuntimeError, match="prepare_wait"):
         sync.wait_for_progress(1)
     clock.set_ros_time_override(RosTime(seconds=98))
+    assert not first.done()  # A reset alone is not forward progress.
     clock.set_ros_time_override(RosTime(seconds=98.1))
     assert first.done()
     with pytest.raises(RuntimeError, match="prepare_wait"):

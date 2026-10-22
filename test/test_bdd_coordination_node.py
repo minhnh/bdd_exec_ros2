@@ -683,7 +683,10 @@ def test_clock_reset_ignores_context_without_start_time():
     assert node._scenario_contexts[context_id] is context
 
 
-def test_coordinator_waits_for_reset_clock_after_scene_setup(monkeypatch):
+@pytest.mark.parametrize("reset_after_setup", [False, True])
+def test_coordinator_waits_for_clock_progress_after_scene_setup(
+    monkeypatch, reset_after_setup
+):
     from rclpy.clock import ROSClock
 
     from bdd_exec_ros2.clock import SimulationClockSync
@@ -719,11 +722,12 @@ def test_coordinator_waits_for_reset_clock_after_scene_setup(monkeypatch):
             setup = asyncio.create_task(node._prepare_next_scenario())
             await asyncio.sleep(0)
             node._sim_interface.setup_scene.assert_awaited_once()
-            clock.set_ros_time_override(Time(seconds=101))
-            await asyncio.sleep(0)
             node._start_scenario_variant.assert_not_called()
-            clock.set_ros_time_override(Time())
-            clock.set_ros_time_override(Time(seconds=0.1))
+            if reset_after_setup:
+                clock.set_ros_time_override(Time())
+                await asyncio.sleep(0)
+                node._start_scenario_variant.assert_not_called()
+            clock.set_ros_time_override(Time(seconds=0.1 if reset_after_setup else 101))
             await setup
             node._start_scenario_variant.assert_called_once_with(context, variant)
         finally:
