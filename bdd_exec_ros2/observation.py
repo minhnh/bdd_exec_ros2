@@ -198,22 +198,31 @@ def collision_target_mapper(
 
 class TargetsDoNotCollideEvaluator(ObservationPolicyEvaluator):
     def __init__(self) -> None:
-        super().__init__((True, "no collision recorded"))
+        super().__init__((True, {"reason": "no collision recorded"}))
 
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, dict[str, object]]:
         if not observations:
             raise ValueError("expected at least one collision observation")
         collision_sets = [sample.value for sample in observations]
         if not all(isinstance(value, (set, frozenset)) for value in collision_sets):
             raise TypeError("collision evaluator expects sets of colliding bodies")
         affected_bodies = set().union(*collision_sets)
+        details = {
+            "observation_uris": [
+                str(sample.observation_uri) for sample in observations
+            ],
+            "collisions_by_observation": [list(value) for value in collision_sets],
+        }
         if all(collision_sets):
-            return False, f"collision affects {sorted(affected_bodies)}"
+            details["reason"] = f"collision affects {sorted(affected_bodies)}"
+            return False, details
         if not affected_bodies:
-            return True, "no active collision for any target"
-        return True, "collision does not affect all targets"
+            details["reason"] = "no active collision for any target"
+        else:
+            details["reason"] = "collision does not affect all targets"
+        return True, details
 
 
 class WrenchForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
@@ -221,15 +230,23 @@ class WrenchForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         super().__init__()
         self.max_force_n = max_force_n
 
+    def get_config(self) -> dict[str, object]:
+        return {"max_force_n": self.max_force_n}
+
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, dict[str, object]]:
         norm = _wrench_force_norm(observations)
         within_limit = norm <= self.max_force_n
         relation = "within" if within_limit else "exceeds"
         return (
             within_limit,
-            f"force norm {norm:.3f} N {relation} {self.max_force_n:.3f} N limit",
+            {
+                "reason": f"force norm {norm:.3f} N {relation} {self.max_force_n:.3f} N limit",
+                "force_norm_n": norm,
+                "observation_uri": str(observations[0].observation_uri),
+                "stamp": observations[0].stamp,
+            },
         )
 
 
@@ -253,9 +270,15 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         self._first_stamp: float | None = None
         self._samples: deque[tuple[float, float]] = deque()
 
+    def get_config(self) -> dict[str, object]:
+        return {
+            "max_force_n": self.max_force_n,
+            "window_seconds": self.window_seconds,
+        }
+
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
-    ) -> tuple[bool | Trinary | None, str]:
+    ) -> tuple[bool | Trinary | None, dict[str, object]]:
         norm = _wrench_force_norm(observations)
         stamp = observations[0].stamp
         if self._first_stamp is None:
@@ -270,7 +293,13 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         if stamp - self._first_stamp < self.window_seconds:
             return (
                 None,
-                f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
+                {
+                    "reason": f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
+                    "force_norm_n": norm,
+                    "elapsed_window_s": stamp - self._first_stamp,
+                    "observation_uri": str(observations[0].observation_uri),
+                    "stamp": stamp,
+                },
             )
 
         rms = sqrt(sum(value for _, value in self._samples) / len(self._samples))
@@ -278,7 +307,14 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         relation = "within" if within_limit else "exceeds"
         return (
             within_limit,
-            f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s",
+            {
+                "reason": f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s",
+                "rms_force_norm_n": rms,
+                "force_norm_n": norm,
+                "sample_count": len(self._samples),
+                "observation_uri": str(observations[0].observation_uri),
+                "stamp": stamp,
+            },
         )
 
 
@@ -292,7 +328,9 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         footprint_size_xy: tuple[float, float] | None = None,
         allowed_outside_ratio: float = 0.0,
     ) -> None:
-        super().__init__((Unknown, "containment expected 2 inputs, received 0"))
+        super().__init__(
+            (Unknown, {"reason": "containment expected 2 inputs, received 0"})
+        )
         if any(size <= 0.0 for size in boundary_size_xy):
             raise ValueError("boundary dimensions must be positive")
         if margin_m < 0.0 or any(2.0 * margin_m >= size for size in boundary_size_xy):
@@ -310,6 +348,20 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         self.footprint_size_xy = footprint_size_xy
         self.allowed_outside_ratio = allowed_outside_ratio
 
+    def get_config(self) -> dict[str, object]:
+        return {
+            "object_uri": str(self.object_uri),
+            "boundary_uri": str(self.boundary_uri),
+            "boundary_size_m": list(self.boundary_size_xy),
+            "margin_m": self.margin_m,
+            "footprint_size_m": (
+                list(self.footprint_size_xy)
+                if self.footprint_size_xy is not None
+                else None
+            ),
+            "allowed_outside_ratio": self.allowed_outside_ratio,
+        }
+
     @staticmethod
     def _rotation(pose: Pose) -> Rotation:
         quaternion = pose.orientation
@@ -323,11 +375,16 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
 
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
-    ) -> tuple[bool | Trinary, str]:
+    ) -> tuple[bool | Trinary, dict[str, object]]:
         if len(observations) != 2:
             return (
                 Unknown,
-                f"containment expected 2 inputs, received {len(observations)}",
+                {
+                    "reason": f"containment expected 2 inputs, received {len(observations)}",
+                    "observation_uris": [
+                        str(sample.observation_uri) for sample in observations
+                    ],
+                },
             )
         values = [sample.value for sample in observations]
         if not all(isinstance(value, DetectedEntityPose) for value in values):
@@ -344,7 +401,9 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
             for position in positions
             for component in (position.x, position.y, position.z)
         ):
-            return Unknown, "containment pose has a non-finite position"
+            return Unknown, {
+                "reason": "containment pose has a non-finite position",
+            }
         try:
             boundary_inverse = self._rotation(boundary_pose).inv()
             object_rotation = (
@@ -353,7 +412,9 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
                 else None
             )
         except ValueError as exc:
-            return Unknown, f"invalid containment pose: {exc}"
+            return Unknown, {
+                "reason": f"invalid containment pose: {exc}",
+            }
 
         offset = [
             object_pose.position.x - boundary_pose.position.x,
@@ -369,7 +430,10 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
                 and abs(center[1]) <= boundary_half_y + 1e-9
             )
             relation = "inside" if inside else "outside"
-            return inside, f"center {relation} boundary"
+            return inside, {
+                "reason": f"center {relation} boundary",
+                "center_in_boundary_frame_m": [float(center[0]), float(center[1])],
+            }
 
         try:
             from shapely.geometry import Polygon, box
@@ -406,5 +470,8 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         relation = "within" if inside else "exceeds"
         return (
             inside,
-            f"footprint outside ratio {outside_ratio * 100.0:.3f}% {relation} {self.allowed_outside_ratio * 100.0:.3f}% limit",
+            {
+                "reason": f"footprint outside ratio {outside_ratio * 100.0:.3f}% {relation} {self.allowed_outside_ratio * 100.0:.3f}% limit",
+                "outside_ratio": outside_ratio,
+            },
         )

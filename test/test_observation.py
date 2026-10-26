@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from math import hypot
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -66,13 +67,15 @@ def test_detection3d_array_adapter_maps_target_uris_and_bbox_centers():
         detections.detections.append(detection)
 
     mapped = map_detection3d_array_by_uri(detections, targets=[target])
-    assert list(mapped[0].value) == [1.0, 0.0, 0.0]
-
-    assert header_stamp(detections, 42.0) == 3.5
+    receipt_stamp = 42.0
+    assert header_stamp(detections, receipt_stamp) == ros_time_to_stamp(
+        Time.from_msg(detections.header.stamp)
+    )
     assert [item.entity_uri for item in mapped] == [target]
-    assert list(mapped[0].value) == [1.0, 0.0, 0.0]
+    position = detections.detections[0].bbox.center.position
+    assert list(mapped[0].value) == [position.x, position.y, position.z]
     detections.header.stamp = Time().to_msg()
-    assert header_stamp(detections, 42.0) == 42.0
+    assert header_stamp(detections, receipt_stamp) == receipt_stamp
 
 
 def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
@@ -99,6 +102,17 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     assert all(isinstance(sample.value, DetectedEntityPose) for sample in samples)
 
     center = PlanarContainmentEvaluator(drawer, workspace, (1.6, 0.8))
+    config = center.get_config()
+    assert config == {
+        "object_uri": str(drawer),
+        "boundary_uri": str(workspace),
+        "boundary_size_m": list(center.boundary_size_xy),
+        "margin_m": center.margin_m,
+        "footprint_size_m": None,
+        "allowed_outside_ratio": center.allowed_outside_ratio,
+    }
+    config["boundary_size_m"].clear()
+    assert center.get_config()["boundary_size_m"] == list(center.boundary_size_xy)
     footprint = PlanarContainmentEvaluator(
         drawer,
         workspace,
@@ -108,7 +122,8 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     )
     result, reason = center.evaluate(samples[:1])
     assert result is Unknown
-    assert reason == "containment expected 2 inputs, received 1"
+    assert isinstance(reason["reason"], str) and reason["reason"]
+    assert reason["observation_uris"] == [str(samples[0].observation_uri)]
     assert center.evaluate(samples)[0] is True
     assert footprint.evaluate(samples)[0] is True
 
@@ -122,8 +137,9 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     ]
     result, reason = footprint.evaluate(samples)
     assert result is False
-    assert "outside ratio" in reason
-    assert "5.000% limit" in reason
+    assert isinstance(reason["reason"], str) and reason["reason"]
+    assert reason["outside_ratio"] > footprint.get_config()["allowed_outside_ratio"]
+    assert footprint.get_config().keys().isdisjoint(reason)
 
     half_sqrt_two = 2**-0.5
     for detection in detections.detections:
@@ -155,16 +171,28 @@ def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
         message,
     )
 
-    assert header_stamp(message, 42.0) == 3.5
-    assert evaluator.evaluate([sample])[0] is True
+    receipt_stamp = 42.0
+    assert header_stamp(message, receipt_stamp) == sample.stamp
+    result, details = evaluator.evaluate([sample])
+    assert result is True
+    assert details["force_norm_n"] == pytest.approx(
+        evaluator.get_config()["max_force_n"]
+    )
 
     message.header.stamp = Time().to_msg()
     message.wrench.force.x = -6.0
     message.wrench.force.y = -8.0
     result, reason = evaluator.evaluate([sample])
-    assert header_stamp(message, 42.0) == 42.0
+    assert header_stamp(message, receipt_stamp) == receipt_stamp
     assert result is False
-    assert "10.000 N" in reason and "5.000 N limit" in reason
+    assert isinstance(reason["reason"], str) and reason["reason"]
+    force = message.wrench.force
+    assert reason["force_norm_n"] == pytest.approx(hypot(force.x, force.y, force.z))
+    assert reason["force_norm_n"] > evaluator.get_config()["max_force_n"]
+    assert reason["stamp"] == sample.stamp
+    assert reason["observation_uri"] == str(sample.observation_uri)
+    assert evaluator.get_config()["max_force_n"] == evaluator.max_force_n
+    assert evaluator.get_config().keys().isdisjoint(reason)
     assert evaluator.evaluate([]) == evaluator.default_result
 
     with pytest.raises(ValueError, match="exactly one"):
@@ -194,9 +222,23 @@ def test_rms_force_evaluator_accumulates_and_warms_up():
         return ObservationStamped(observation_uri, provider_uri, stamp, message)
 
     rms = WrenchRmsForceNormWithinLimitEvaluator()
-    assert rms.evaluate([sample(0.0, 10.0)])[0] is None
-    assert rms.evaluate([sample(0.25, 10.0)])[0] is True
-    assert rms.evaluate([sample(0.26, 20.0)])[0] is False
+    config = rms.get_config()
+    assert config["max_force_n"] == rms.max_force_n
+    assert config["window_seconds"] == rms.window_seconds
+    below_limit = config["max_force_n"] / 2
+    result, details = rms.evaluate([sample(0.0, below_limit)])
+    assert result is None
+    assert config.keys().isdisjoint(details)
+    result, details = rms.evaluate([sample(config["window_seconds"], below_limit)])
+    assert result is True
+    assert details["rms_force_norm_n"] == pytest.approx(below_limit)
+    result, details = rms.evaluate(
+        [sample(2 * config["window_seconds"], 2 * config["max_force_n"])]
+    )
+    assert result is False
+    assert config.keys().isdisjoint(details)
+    assert details["rms_force_norm_n"] > config["max_force_n"]
+    assert rms.get_config() == config
 
 
 def test_simulation_snapshot_adapter_extracts_stamp_and_mapped_poses():
@@ -229,7 +271,7 @@ def test_collision_evaluator_matches_one_current_group():
     msg = Collision()
     msg.stamp.sec = 4
     msg.bodies = ["object", "workspace"]
-    assert collision_stamp(msg, 99.0) == 4.0
+    assert collision_stamp(msg, 99.0) == ros_time_to_stamp(Time.from_msg(msg.stamp))
 
     group = frozenset(msg.bodies)
     observations = [
@@ -248,7 +290,9 @@ def test_collision_evaluator_matches_one_current_group():
     ]
     result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is False
-    assert "object" in reason and "workspace" in reason
+    assert isinstance(reason["reason"], str) and reason["reason"]
+    assert len(reason["collisions_by_observation"]) == len(observations)
+    assert all(set(bodies) == group for bodies in reason["collisions_by_observation"])
 
     observations.append(
         ObservationStamped(
@@ -260,7 +304,7 @@ def test_collision_evaluator_matches_one_current_group():
     )
     result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is False
-    assert all(body in reason for body in ("object", "workspace"))
+    assert all(set(bodies) == group for bodies in reason["collisions_by_observation"])
 
     msg.bodies = []
     clear_group = frozenset()
@@ -275,12 +319,14 @@ def test_collision_evaluator_matches_one_current_group():
     ]
     result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is True
-    assert "no active collision" in reason
+    assert all(not bodies for bodies in reason["collisions_by_observation"])
 
 
 def test_collision_evaluator_defaults_to_no_collision():
     evaluator = TargetsDoNotCollideEvaluator()
-    assert evaluator.evaluate([]) == (True, "no collision recorded")
+    result, details = evaluator.evaluate([])
+    assert result is True
+    assert isinstance(details.get("reason"), str) and details["reason"]
 
 
 def test_place_behaviour_forwards_workspace_parameter():
