@@ -21,6 +21,7 @@ from bdd_dsl.models.observation import (
     EntityObservation,
     ObservationPolicyEvaluator,
     ObservationStamped,
+    init_sample_details,
 )
 from bdd_ros2_interfaces.msg import Collision
 from geometry_msgs.msg import Pose, PoseStamped, WrenchStamped
@@ -209,12 +210,8 @@ class TargetsDoNotCollideEvaluator(ObservationPolicyEvaluator):
         if not all(isinstance(value, (set, frozenset)) for value in collision_sets):
             raise TypeError("collision evaluator expects sets of colliding bodies")
         affected_bodies = set().union(*collision_sets)
-        details = {
-            "observation_uris": [
-                str(sample.observation_uri) for sample in observations
-            ],
-            "collisions_by_observation": [list(value) for value in collision_sets],
-        }
+        details = init_sample_details(observations)
+        details["collisions_by_observation"] = [list(value) for value in collision_sets]
         if all(collision_sets):
             details["reason"] = f"collision affects {sorted(affected_bodies)}"
             return False, details
@@ -242,10 +239,9 @@ class WrenchForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         return (
             within_limit,
             {
+                **init_sample_details(observations),
                 "reason": f"force norm {norm:.3f} N {relation} {self.max_force_n:.3f} N limit",
                 "force_norm_n": norm,
-                "observation_uri": str(observations[0].observation_uri),
-                "stamp": observations[0].stamp,
             },
         )
 
@@ -294,11 +290,10 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
             return (
                 None,
                 {
+                    **init_sample_details(observations),
                     "reason": f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
                     "force_norm_n": norm,
                     "elapsed_window_s": stamp - self._first_stamp,
-                    "observation_uri": str(observations[0].observation_uri),
-                    "stamp": stamp,
                 },
             )
 
@@ -308,12 +303,11 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         return (
             within_limit,
             {
+                **init_sample_details(observations),
                 "reason": f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s",
                 "rms_force_norm_n": rms,
                 "force_norm_n": norm,
                 "sample_count": len(self._samples),
-                "observation_uri": str(observations[0].observation_uri),
-                "stamp": stamp,
             },
         )
 
@@ -376,16 +370,12 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
     ) -> tuple[bool | Trinary, dict[str, object]]:
+        details = init_sample_details(observations)
         if len(observations) != 2:
-            return (
-                Unknown,
-                {
-                    "reason": f"containment expected 2 inputs, received {len(observations)}",
-                    "observation_uris": [
-                        str(sample.observation_uri) for sample in observations
-                    ],
-                },
+            details["reason"] = (
+                f"containment expected 2 inputs, received {len(observations)}"
             )
+            return Unknown, details
         values = [sample.value for sample in observations]
         if not all(isinstance(value, DetectedEntityPose) for value in values):
             raise TypeError("containment evaluator expects detected entity poses")
@@ -401,9 +391,8 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
             for position in positions
             for component in (position.x, position.y, position.z)
         ):
-            return Unknown, {
-                "reason": "containment pose has a non-finite position",
-            }
+            details["reason"] = "containment pose has a non-finite position"
+            return Unknown, details
         try:
             boundary_inverse = self._rotation(boundary_pose).inv()
             object_rotation = (
@@ -412,9 +401,8 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
                 else None
             )
         except ValueError as exc:
-            return Unknown, {
-                "reason": f"invalid containment pose: {exc}",
-            }
+            details["reason"] = f"invalid containment pose: {exc}"
+            return Unknown, details
 
         offset = [
             object_pose.position.x - boundary_pose.position.x,
@@ -430,10 +418,9 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
                 and abs(center[1]) <= boundary_half_y + 1e-9
             )
             relation = "inside" if inside else "outside"
-            return inside, {
-                "reason": f"center {relation} boundary",
-                "center_in_boundary_frame_m": [float(center[0]), float(center[1])],
-            }
+            details["reason"] = f"center {relation} boundary"
+            details["center_in_boundary_frame_m"] = [float(center[0]), float(center[1])]
+            return inside, details
 
         try:
             from shapely.geometry import Polygon, box
@@ -468,10 +455,8 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         )
         inside = outside_ratio <= self.allowed_outside_ratio + 1e-9
         relation = "within" if inside else "exceeds"
-        return (
-            inside,
-            {
-                "reason": f"footprint outside ratio {outside_ratio * 100.0:.3f}% {relation} {self.allowed_outside_ratio * 100.0:.3f}% limit",
-                "outside_ratio": outside_ratio,
-            },
+        details["reason"] = (
+            f"footprint outside ratio {outside_ratio * 100.0:.3f}% {relation} {self.allowed_outside_ratio * 100.0:.3f}% limit"
         )
+        details["outside_ratio"] = outside_ratio
+        return inside, details

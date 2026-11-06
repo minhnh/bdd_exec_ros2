@@ -123,15 +123,20 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     result, reason = center.evaluate(samples[:1])
     assert result is Unknown
     assert isinstance(reason["reason"], str) and reason["reason"]
-    assert reason["observation_uris"] == [str(samples[0].observation_uri)]
-    assert center.evaluate(samples)[0] is True
+    assert reason["sample_ids"] == [samples[0].sample_id]
+    result, details = center.evaluate(samples)
+    assert result is True
+    assert details["sample_ids"] == [sample.sample_id for sample in samples]
     assert footprint.evaluate(samples)[0] is True
 
     detections.detections[0].bbox.center.position.x = 0.643
     moved = map_detection3d_array_by_uri(detections, targets=[drawer, workspace])
     samples = [
         ObservationStamped(
-            sample.observation_uri, sample.provider_uri, 2.0, value.value
+            sample.observation_uri,
+            sample.provider_uri,
+            2.0,
+            value.value,
         )
         for sample, value in zip(samples, moved, strict=True)
     ]
@@ -139,6 +144,7 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     assert result is False
     assert isinstance(reason["reason"], str) and reason["reason"]
     assert reason["outside_ratio"] > footprint.get_config()["allowed_outside_ratio"]
+    assert reason["sample_ids"] == [sample.sample_id for sample in samples]
     assert footprint.get_config().keys().isdisjoint(reason)
 
     half_sqrt_two = 2**-0.5
@@ -189,8 +195,7 @@ def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
     force = message.wrench.force
     assert reason["force_norm_n"] == pytest.approx(hypot(force.x, force.y, force.z))
     assert reason["force_norm_n"] > evaluator.get_config()["max_force_n"]
-    assert reason["stamp"] == sample.stamp
-    assert reason["observation_uri"] == str(sample.observation_uri)
+    assert reason["sample_ids"] == [sample.sample_id]
     assert evaluator.get_config()["max_force_n"] == evaluator.max_force_n
     assert evaluator.get_config().keys().isdisjoint(reason)
     assert evaluator.evaluate([]) == evaluator.default_result
@@ -219,15 +224,22 @@ def test_rms_force_evaluator_accumulates_and_warms_up():
 
     def sample(stamp: float, force: float) -> ObservationStamped:
         message.wrench.force.x = force
-        return ObservationStamped(observation_uri, provider_uri, stamp, message)
+        return ObservationStamped(
+            observation_uri,
+            provider_uri,
+            stamp,
+            message,
+        )
 
     rms = WrenchRmsForceNormWithinLimitEvaluator()
     config = rms.get_config()
     assert config["max_force_n"] == rms.max_force_n
     assert config["window_seconds"] == rms.window_seconds
     below_limit = config["max_force_n"] / 2
-    result, details = rms.evaluate([sample(0.0, below_limit)])
+    first_sample = sample(0.0, below_limit)
+    result, details = rms.evaluate([first_sample])
     assert result is None
+    assert details["sample_ids"] == [first_sample.sample_id]
     assert config.keys().isdisjoint(details)
     result, details = rms.evaluate([sample(config["window_seconds"], below_limit)])
     assert result is True
@@ -292,6 +304,7 @@ def test_collision_evaluator_matches_one_current_group():
     assert result is False
     assert isinstance(reason["reason"], str) and reason["reason"]
     assert len(reason["collisions_by_observation"]) == len(observations)
+    assert reason["sample_ids"] == [sample.sample_id for sample in observations]
     assert all(set(bodies) == group for bodies in reason["collisions_by_observation"])
 
     observations.append(
