@@ -97,6 +97,21 @@ ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml \
   world_entity_name:=world
 ```
 
+### Provenance Recording
+
+Set `prov_output_dir` to record scenario evidence independently of rosbag recording.
+The empty default disables recording.
+
+```bash
+ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml prov_output_dir:=/tmp/bdd-provenance
+```
+
+Recording creates `execution.trig` with model, source-file, package and execution provenance, plus
+`<context-uuid>/evidence.jsonl` and `runtime.json` for each scenario execution.
+Set `prov_format` to `json-ld` or `nquads` to change the dataset format.
+Use a fresh output directory for each launch; existing recordings are not overwritten.
+Recording errors stop execution when provenance is enabled.
+
 ### Rosbag Recording
 
 [`record_execution.py`](./bdd_exec_ros2/executables/record_execution.py) records the configured topic set,

@@ -22,6 +22,12 @@ launch:
   - arg:
       name: "simulate_collision"
       default: "false"
+  - arg:
+      name: "prov_format"
+      default: "trig"
+  - arg:
+      name: "prov_output_dir"
+      default: ""
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
@@ -29,6 +35,10 @@ launch:
       name: "test_coordinator"
       param:
         - from: "$(var config)"
+        - name: "prov_format"
+          value: "$(var prov_format)"
+        - name: "prov_output_dir"
+          value: "$(var prov_output_dir)"
         - name: "graph_models"
           value: "$(var graph_models)"
         - name: "scene_setup_mode"

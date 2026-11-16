@@ -11,13 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 from math import hypot
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from bdd_dsl.models.observation import ObservationStamped
+from bdd_dsl.models.observation import ObsDetailKey, ObservationStamped
 from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_AGN,
     URI_BHV_PRED_TARGET_OBJ,
@@ -122,11 +121,11 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     )
     result, reason = center.evaluate(samples[:1])
     assert result is Unknown
-    assert isinstance(reason["reason"], str) and reason["reason"]
-    assert reason["sample_ids"] == [samples[0].sample_id]
+    assert isinstance(reason[ObsDetailKey.REASON], str) and reason[ObsDetailKey.REASON]
+    assert reason[ObsDetailKey.SAMPLE_IDS] == [samples[0].sample_id]
     result, details = center.evaluate(samples)
     assert result is True
-    assert details["sample_ids"] == [sample.sample_id for sample in samples]
+    assert details[ObsDetailKey.SAMPLE_IDS] == [sample.sample_id for sample in samples]
     assert footprint.evaluate(samples)[0] is True
 
     detections.detections[0].bbox.center.position.x = 0.643
@@ -142,9 +141,9 @@ def test_planar_containment_uses_full_detection_poses_and_inclusive_margin():
     ]
     result, reason = footprint.evaluate(samples)
     assert result is False
-    assert isinstance(reason["reason"], str) and reason["reason"]
+    assert isinstance(reason[ObsDetailKey.REASON], str) and reason[ObsDetailKey.REASON]
     assert reason["outside_ratio"] > footprint.get_config()["allowed_outside_ratio"]
-    assert reason["sample_ids"] == [sample.sample_id for sample in samples]
+    assert reason[ObsDetailKey.SAMPLE_IDS] == [sample.sample_id for sample in samples]
     assert footprint.get_config().keys().isdisjoint(reason)
 
     half_sqrt_two = 2**-0.5
@@ -191,11 +190,11 @@ def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
     result, reason = evaluator.evaluate([sample])
     assert header_stamp(message, receipt_stamp) == receipt_stamp
     assert result is False
-    assert isinstance(reason["reason"], str) and reason["reason"]
+    assert isinstance(reason[ObsDetailKey.REASON], str) and reason[ObsDetailKey.REASON]
     force = message.wrench.force
     assert reason["force_norm_n"] == pytest.approx(hypot(force.x, force.y, force.z))
     assert reason["force_norm_n"] > evaluator.get_config()["max_force_n"]
-    assert reason["sample_ids"] == [sample.sample_id]
+    assert reason[ObsDetailKey.SAMPLE_IDS] == [sample.sample_id]
     assert evaluator.get_config()["max_force_n"] == evaluator.max_force_n
     assert evaluator.get_config().keys().isdisjoint(reason)
     assert evaluator.evaluate([]) == evaluator.default_result
@@ -239,7 +238,7 @@ def test_rms_force_evaluator_accumulates_and_warms_up():
     first_sample = sample(0.0, below_limit)
     result, details = rms.evaluate([first_sample])
     assert result is None
-    assert details["sample_ids"] == [first_sample.sample_id]
+    assert details[ObsDetailKey.SAMPLE_IDS] == [first_sample.sample_id]
     assert config.keys().isdisjoint(details)
     result, details = rms.evaluate([sample(config["window_seconds"], below_limit)])
     assert result is True
@@ -302,9 +301,11 @@ def test_collision_evaluator_matches_one_current_group():
     ]
     result, reason = TargetsDoNotCollideEvaluator().evaluate(observations)
     assert result is False
-    assert isinstance(reason["reason"], str) and reason["reason"]
+    assert isinstance(reason[ObsDetailKey.REASON], str) and reason[ObsDetailKey.REASON]
     assert len(reason["collisions_by_observation"]) == len(observations)
-    assert reason["sample_ids"] == [sample.sample_id for sample in observations]
+    assert reason[ObsDetailKey.SAMPLE_IDS] == [
+        sample.sample_id for sample in observations
+    ]
     assert all(set(bodies) == group for bodies in reason["collisions_by_observation"])
 
     observations.append(
@@ -339,7 +340,10 @@ def test_collision_evaluator_defaults_to_no_collision():
     evaluator = TargetsDoNotCollideEvaluator()
     result, details = evaluator.evaluate([])
     assert result is True
-    assert isinstance(details.get("reason"), str) and details["reason"]
+    assert (
+        isinstance(details.get(ObsDetailKey.REASON), str)
+        and details[ObsDetailKey.REASON]
+    )
 
 
 def test_place_behaviour_forwards_workspace_parameter():

@@ -19,22 +19,71 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
 import pytest
+from bdd_dsl.prov import RecordingSession
 from bdd_ros2_interfaces.msg import Event, ScenarioStatus
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
+from rdf_utils.models.prov import get_py_pkg_info
 from rdf_utils.models.vocab import URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER
-from rdflib import Graph, URIRef
+from rdflib import RDF, Dataset, Graph, URIRef
 
 from bdd_exec_ros2.conversions import TRINARY_NAMES, ros_time_to_stamp
 from bdd_exec_ros2.executables.bdd_coordination_node import (
     BddCoordNode,
     SceneSetupMode,
 )
+from bdd_exec_ros2.prov import load_bdd_ros_prov
+
+
+def _open_recorder(session):
+    from bdd_exec_ros2.prov import RosScenarioExecRecorder
+
+    context = SimpleNamespace(
+        context_id=uuid4(),
+        scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        obs_manager=SimpleNamespace(obs_policies={}),
+    )
+    node = Mock()
+    node.list_parameters.return_value.names = []
+    return RosScenarioExecRecorder.open(
+        session,
+        node,
+        context,
+        SimpleNamespace(id=URIRef("urn:variant")),
+        scene_setup_mode="none",
+    )
 
 
 def _node(**attrs):
     node = BddCoordNode.__new__(BddCoordNode)
-    node.__dict__.update({"_user_story": None, "_use_sim_time": False, **attrs})
+    output_dir = attrs.pop("_prov_output_dir", None)
+    session = (
+        RecordingSession(
+            output_dir,
+            get_py_pkg_info("bdd_exec_ros2").purl,
+            use_sim_time=attrs.get("_use_sim_time", False),
+        )
+        if output_dir is not None
+        else None
+    )
+    if session is not None:
+        load_bdd_ros_prov(session.prov_bundle)
+    node.__dict__.update(
+        {
+            "_user_story": None,
+            "_use_sim_time": False,
+            "_recorders": {},
+            "_scr_lock": threading.Lock(),
+            "graph": Graph(identifier=URIRef(uuid4().urn)),
+            "_recording_session": session,
+            "_scene_setup_mode": SceneSetupMode.NONE,
+            "list_parameters": Mock(return_value=SimpleNamespace(names=[])),
+            **attrs,
+        }
+    )
+    if session is not None and isinstance(node.graph, Graph):
+        session.model_graph.__iadd__(node.graph)
+        node.graph = session.model_graph
     return node
 
 
@@ -734,3 +783,328 @@ def test_coordinator_waits_for_clock_progress_after_scene_setup(
             sync.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_recording_contexts_have_independent_snapshots_and_lifecycles(
+    tmp_path, enabled
+):
+    from bdd_dsl.prov import read_journal
+
+    model = Graph()
+    model.add((URIRef("urn:model"), RDF.type, URIRef("urn:Model")))
+    node = _node(
+        _prov_output_dir=tmp_path if enabled else None,
+        _scene_setup_mode=SceneSetupMode.NONE,
+        graph=model,
+        get_logger=Mock(return_value=Mock()),
+    )
+    contexts = [
+        SimpleNamespace(
+            context_id=uuid4(),
+            scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+            obs_manager=SimpleNamespace(obs_policies={}),
+        )
+        for _ in range(2)
+    ]
+    for context in contexts:
+        with node._scr_lock:
+            node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
+            node._close_recording(context.context_id, "finished", 1.0)
+    assert not node._recorders
+    if not enabled:
+        assert not list(tmp_path.iterdir())
+        return
+    assert len(list(tmp_path.iterdir())) == len(contexts) + 1
+    from rdflib.namespace import PROV
+
+    dataset = Dataset().parse(tmp_path / "execution.trig", format="trig")
+    bundles = list(dataset.default_graph.subjects(PROV.wasGeneratedBy, None))
+    assert len(set(bundles)) == len(contexts)
+    session = node._recording_session
+    assert session is not None
+    assert set(dataset.graph(session.model_id)) == set(model)
+    assert (
+        len(
+            [
+                graph
+                for graph in dataset.graphs()
+                if (URIRef("urn:model"), RDF.type, URIRef("urn:Model")) in graph
+            ]
+        )
+        == 1
+    )
+    for context in contexts:
+        execution_id = URIRef(context.context_id.urn)
+        bundle_id = dataset.default_graph.value(None, PROV.wasGeneratedBy, execution_id)
+        assert bundle_id is not None and bundle_id != execution_id
+        graph = dataset.graph(bundle_id)
+        assert (bundle_id, RDF.type, PROV.Bundle) in graph
+        assert (execution_id, RDF.type, PROV.Activity) in graph
+        assert (bundle_id, PROV.wasAttributedTo, session.agent_id) in graph
+        assert (bundle_id, RDF.type, PROV.Activity) not in graph
+        assert list(graph.objects(execution_id, PROV.used))
+    for context in contexts:
+        directory = tmp_path / str(context.context_id)
+        assert (tmp_path / "execution.trig").is_file()
+        records = list(read_journal(directory / "evidence.jsonl"))
+        assert {r["execution_id"] for r in records} == {URIRef(context.context_id.urn)}
+        assert records[-1]["data"]["termination"] == "finished"
+        before = (directory / "evidence.jsonl").read_bytes()
+        with node._scr_lock, pytest.raises(FileExistsError):
+            node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
+        assert (directory / "evidence.jsonl").read_bytes() == before
+
+
+def test_recording_initialization_failure_propagates_without_registering_a_writer(
+    tmp_path,
+):
+    node = _node(
+        _prov_output_dir=tmp_path,
+        graph=Graph(),
+        list_parameters=Mock(side_effect=OSError("disk full")),
+        get_logger=Mock(return_value=Mock()),
+    )
+    with node._scr_lock, pytest.raises(OSError, match="disk full"):
+        node._open_recording(
+            SimpleNamespace(
+                context_id=uuid4(), obs_manager=SimpleNamespace(obs_policies={})
+            ),
+            None,
+        )
+    assert not node._recorders
+
+
+def test_runtime_snapshot_captures_ros_parameters(tmp_path):
+    import json
+
+    context = SimpleNamespace(
+        context_id=uuid4(),
+        scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        obs_manager=SimpleNamespace(obs_policies={}),
+    )
+    parameters = {"use_sim_time": False}
+    node = _node(
+        _prov_output_dir=tmp_path,
+        list_parameters=Mock(return_value=SimpleNamespace(names=list(parameters))),
+        get_parameter=Mock(
+            side_effect=lambda name: SimpleNamespace(value=parameters[name])
+        ),
+    )
+    with node._scr_lock:
+        node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
+    recorder = node._recorders[context.context_id]
+    recorder.close()
+    snapshot = json.loads(
+        (tmp_path / str(context.context_id) / "runtime.json").read_text()
+    )
+    assert snapshot == {"parameters": parameters}
+
+
+def test_shutdown_records_incomplete_termination_under_the_context_lock(tmp_path):
+    from bdd_dsl.prov import read_journal
+
+    from bdd_exec_ros2.prov import RosScenarioExecRecorder
+
+    context_id = uuid4()
+    path = tmp_path / "evidence.jsonl"
+    session = RecordingSession(
+        tmp_path, get_py_pkg_info("bdd_exec_ros2").purl, use_sim_time=False
+    )
+    recorder = RosScenarioExecRecorder(path, context_id, session)
+    node = _node(
+        _sim_clock=None,
+        _recorders={context_id: recorder},
+        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=Time()))),
+    )
+    close = recorder.close
+
+    def close_with_lock_check():
+        assert node._scr_lock.locked()
+        close()
+
+    recorder.close = close_with_lock_check
+    with patch("rclpy.node.Node.destroy_node", return_value=True):
+        assert node.destroy_node()
+    assert not node._recorders
+    assert list(read_journal(path))[-1]["data"]["termination"] == "shutdown"
+
+
+def test_status_reads_do_not_record_evaluations():
+    context_id = uuid4()
+    recorder = Mock()
+    context = SimpleNamespace(
+        obs_manager=SimpleNamespace(
+            pending_end_deadline=None, scr_end_time=None, obs_policies={}
+        ),
+        scr_rep=object(),
+        end_event_sent=False,
+    )
+    node = _node(
+        _scenario_contexts={context_id: context},
+        _recorders={context_id: recorder},
+        _scr_status_pub=Mock(),
+        _schedule_next_scenario=Mock(),
+        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=Time()))),
+    )
+    with patch(
+        "bdd_exec_ros2.executables.bdd_coordination_node.to_scenario_status_msg",
+        return_value=ScenarioStatus(),
+    ):
+        node._status_timer_callback()
+        node._status_timer_callback()
+    assert node._scr_status_pub.publish.call_count == 2
+    assert not recorder.mock_calls
+
+
+def test_metadata_save_failure_never_attaches_callbacks_or_registers_recorder(
+    tmp_path,
+):
+    policy = SimpleNamespace(evaluator=None, evaluator_id=None, prov_recorder=None)
+    context = SimpleNamespace(
+        context_id=uuid4(),
+        scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        obs_manager=SimpleNamespace(obs_policies={URIRef("urn:policy"): policy}),
+    )
+    node = _node(
+        _prov_output_dir=tmp_path,
+        graph=Graph(),
+        get_logger=Mock(return_value=Mock()),
+    )
+    with (
+        patch(
+            "bdd_dsl.prov.RecordingSession.save",
+            side_effect=OSError("disk full"),
+        ),
+        node._scr_lock,
+        pytest.raises(OSError, match="disk full"),
+    ):
+        node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
+    assert not node._recorders
+    assert policy.prov_recorder is None
+
+
+def test_successful_recording_initialization_attaches_policy_callback(tmp_path):
+    policy = SimpleNamespace(evaluator=None, evaluator_id=None, prov_recorder=None)
+    context = SimpleNamespace(
+        context_id=uuid4(),
+        scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        obs_manager=SimpleNamespace(obs_policies={URIRef("urn:policy"): policy}),
+    )
+    node = _node(
+        _prov_output_dir=tmp_path,
+        graph=Graph(),
+        _scene_setup_mode=SceneSetupMode.NONE,
+        get_logger=Mock(return_value=Mock()),
+    )
+    with node._scr_lock:
+        node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
+        assert policy.prov_recorder is node._recorders[context.context_id]
+        node._close_recording(context.context_id, "finished", 1.0)
+
+
+def test_model_loading_records_sources_transformation_and_execution_use(tmp_path):
+    import json
+
+    from rdf_utils.models.vocab import URI_PROV_EXT_TYPE_TRANSFORMATION
+    from rdflib.namespace import DCTERMS, PROV, TIME
+
+    from bdd_exec_ros2.executables.bdd_coordination_node import (
+        load_graph_models_in_yaml,
+    )
+
+    source = tmp_path / "model.jsonld"
+    source.write_text(
+        json.dumps({"@id": "urn:subject", "urn:predicate": {"@id": "urn:object"}})
+    )
+    manifest = tmp_path / "models.yaml"
+    manifest.write_text(json.dumps([{"path": str(source), "format": "json-ld"}]))
+    session = RecordingSession(
+        tmp_path, get_py_pkg_info("bdd_exec_ros2").purl, use_sim_time=False
+    )
+    provenance, model_g = session.prov_bundle, session.model_graph
+    load_graph_models_in_yaml(str(manifest), model_g, session.prov_bundle)
+    model = model_g
+    (activity,) = provenance.objects(model.identifier, PROV.wasGeneratedBy)
+    assert (activity, RDF.type, URI_PROV_EXT_TYPE_TRANSFORMATION) in provenance
+    (collection,) = (
+        entity
+        for entity in provenance.objects(activity, PROV.used)
+        if (entity, RDF.type, PROV.Collection) in provenance
+    )
+    (loading,) = provenance.objects(model.identifier, PROV.wasInfluencedBy)
+
+    assert (
+        loading,
+        PROV.wasAssociatedWith,
+        get_py_pkg_info("rdflib").purl,
+    ) in provenance
+    (contribution,) = provenance.subjects(PROV.wasGeneratedBy, loading)
+    assert contribution != model.identifier
+    assert (activity, PROV.used, contribution) in provenance
+    assert (model.identifier, PROV.wasDerivedFrom, contribution) in provenance
+    files = set(provenance.objects(collection, PROV.hadMember))
+    from rdf_utils.models.prov import get_file_path
+
+    assert {get_file_path(provenance, file) for file in files} == {source, manifest}
+    assert all(provenance.value(file, DCTERMS.identifier) is not None for file in files)
+    for boundary in (TIME.hasBeginning, TIME.hasEnd):
+        instant = provenance.value(activity, boundary)
+        assert (instant, RDF.type, TIME.Instant) in provenance
+    assert (model.identifier, PROV.wasGeneratedBy, activity) in provenance
+    recorder = _open_recorder(session)
+    assert (recorder.execution_id, PROV.used, model.identifier) in recorder.graph
+    restored = Dataset().parse(session.path, format=session.dataset_format)
+    assert set(restored.graph(model.identifier)) == set(model)
+    # Bundle declarations live inside their named graphs.
+    bundles = {
+        graph.identifier
+        for graph in restored.graphs()
+        if (graph.identifier, RDF.type, PROV.Bundle) in graph
+    }
+    assert recorder.bundle_id in bundles
+    assert any(
+        (model.identifier, PROV.wasGeneratedBy, activity) in restored.graph(bundle)
+        for bundle in bundles
+    )
+    recorder.close()
+
+
+def test_model_loading_keeps_shared_graph_available_to_robbdd_converters(tmp_path):
+    import json
+
+    from bdd_exec_ros2.executables.bdd_coordination_node import (
+        load_graph_models_in_yaml,
+    )
+
+    paths = [tmp_path / name for name in ("first.bdd", "second.bdd")]
+    for path in paths:
+        path.write_text("example")
+    manifest = tmp_path / "models.yaml"
+    manifest.write_text(
+        json.dumps([{"path": str(path), "format": "robbdd"} for path in paths])
+    )
+    converted = []
+
+    def convert(model, g):
+        for previous in converted:
+            assert (URIRef(previous._tx_filename), RDF.type, URIRef("urn:model")) in g
+        converted.append(model)
+        g.add((URIRef(model._tx_filename), RDF.type, URIRef("urn:model")))
+
+    metamodel = SimpleNamespace(
+        model_from_file=lambda path: SimpleNamespace(_tx_filename=path, imports=[])
+    )
+    graph = Graph(identifier=URIRef(uuid4().urn))
+    with (
+        patch("textx.metamodel_for_file", return_value=metamodel),
+        patch(
+            "textx.registration.language_for_file",
+            return_value=SimpleNamespace(name="robbdd"),
+        ),
+        patch("robbdd.rdf.bdd.create_bdd_model_graph", side_effect=convert),
+    ):
+        load_graph_models_in_yaml(str(manifest), graph)
+    assert set(graph.subjects(RDF.type, URIRef("urn:model"))) == {
+        URIRef(str(path)) for path in paths
+    }

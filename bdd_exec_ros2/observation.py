@@ -19,6 +19,7 @@ from math import hypot, isfinite, sqrt
 
 from bdd_dsl.models.observation import (
     EntityObservation,
+    ObsDetailKey,
     ObservationPolicyEvaluator,
     ObservationStamped,
     init_sample_details,
@@ -199,7 +200,7 @@ def collision_target_mapper(
 
 class TargetsDoNotCollideEvaluator(ObservationPolicyEvaluator):
     def __init__(self) -> None:
-        super().__init__((True, {"reason": "no collision recorded"}))
+        super().__init__((True, {ObsDetailKey.REASON: "no collision recorded"}))
 
     def _evaluate_samples(
         self, observations: list[ObservationStamped]
@@ -213,12 +214,14 @@ class TargetsDoNotCollideEvaluator(ObservationPolicyEvaluator):
         details = init_sample_details(observations)
         details["collisions_by_observation"] = [list(value) for value in collision_sets]
         if all(collision_sets):
-            details["reason"] = f"collision affects {sorted(affected_bodies)}"
+            details[ObsDetailKey.REASON] = (
+                f"collision affects {sorted(affected_bodies)}"
+            )
             return False, details
         if not affected_bodies:
-            details["reason"] = "no active collision for any target"
+            details[ObsDetailKey.REASON] = "no active collision for any target"
         else:
-            details["reason"] = "collision does not affect all targets"
+            details[ObsDetailKey.REASON] = "collision does not affect all targets"
         return True, details
 
 
@@ -240,7 +243,7 @@ class WrenchForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
             within_limit,
             {
                 **init_sample_details(observations),
-                "reason": f"force norm {norm:.3f} N {relation} {self.max_force_n:.3f} N limit",
+                ObsDetailKey.REASON: f"force norm {norm:.3f} N {relation} {self.max_force_n:.3f} N limit",
                 "force_norm_n": norm,
             },
         )
@@ -291,7 +294,7 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
                 None,
                 {
                     **init_sample_details(observations),
-                    "reason": f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
+                    ObsDetailKey.REASON: f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
                     "force_norm_n": norm,
                     "elapsed_window_s": stamp - self._first_stamp,
                 },
@@ -304,7 +307,7 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
             within_limit,
             {
                 **init_sample_details(observations),
-                "reason": f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s",
+                ObsDetailKey.REASON: f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s",
                 "rms_force_norm_n": rms,
                 "force_norm_n": norm,
                 "sample_count": len(self._samples),
@@ -323,7 +326,10 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         allowed_outside_ratio: float = 0.0,
     ) -> None:
         super().__init__(
-            (Unknown, {"reason": "containment expected 2 inputs, received 0"})
+            (
+                Unknown,
+                {ObsDetailKey.REASON: "containment expected 2 inputs, received 0"},
+            )
         )
         if any(size <= 0.0 for size in boundary_size_xy):
             raise ValueError("boundary dimensions must be positive")
@@ -372,7 +378,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
     ) -> tuple[bool | Trinary, dict[str, object]]:
         details = init_sample_details(observations)
         if len(observations) != 2:
-            details["reason"] = (
+            details[ObsDetailKey.REASON] = (
                 f"containment expected 2 inputs, received {len(observations)}"
             )
             return Unknown, details
@@ -391,7 +397,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
             for position in positions
             for component in (position.x, position.y, position.z)
         ):
-            details["reason"] = "containment pose has a non-finite position"
+            details[ObsDetailKey.REASON] = "containment pose has a non-finite position"
             return Unknown, details
         try:
             boundary_inverse = self._rotation(boundary_pose).inv()
@@ -401,7 +407,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
                 else None
             )
         except ValueError as exc:
-            details["reason"] = f"invalid containment pose: {exc}"
+            details[ObsDetailKey.REASON] = f"invalid containment pose: {exc}"
             return Unknown, details
 
         offset = [
@@ -418,7 +424,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
                 and abs(center[1]) <= boundary_half_y + 1e-9
             )
             relation = "inside" if inside else "outside"
-            details["reason"] = f"center {relation} boundary"
+            details[ObsDetailKey.REASON] = f"center {relation} boundary"
             details["center_in_boundary_frame_m"] = [float(center[0]), float(center[1])]
             return inside, details
 
@@ -455,7 +461,7 @@ class PlanarContainmentEvaluator(ObservationPolicyEvaluator):
         )
         inside = outside_ratio <= self.allowed_outside_ratio + 1e-9
         relation = "within" if inside else "exceeds"
-        details["reason"] = (
+        details[ObsDetailKey.REASON] = (
             f"footprint outside ratio {outside_ratio * 100.0:.3f}% {relation} {self.allowed_outside_ratio * 100.0:.3f}% limit"
         )
         details["outside_ratio"] = outside_ratio
