@@ -109,10 +109,10 @@ ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml prov_output_dir:=/tmp/bdd-pr
 Set `use_sim_time:=true` to test both nodes using the mockup's wall-time-paced `/clock`.
 The default is wall-clock time without a clock publisher.
 
-Recording creates `execution.trig` with model, source-file, package and execution provenance, plus
+Recording creates `execution.ld.json` with model, source-file, package and execution provenance, plus
 `<context-uuid>/evidence.jsonl` for each scenario execution. Node parameters are captured once
 in the shared provenance bundle.
-Set `prov_format` to `json-ld` or `nquads` to change the dataset format.
+Set `prov_format` to `trig` or `nquads` to change the dataset format.
 Use a fresh output directory for each launch; existing recordings are not overwritten.
 Recording errors stop execution when provenance is enabled.
 

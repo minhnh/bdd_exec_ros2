@@ -18,6 +18,7 @@ def _open_recorder(session):
     context = SimpleNamespace(
         context_id=uuid4(),
         scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        variation_params={},
         obs_manager=SimpleNamespace(obs_policies={}),
     )
     return RosScenarioExecRecorder.open(

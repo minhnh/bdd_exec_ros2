@@ -1180,11 +1180,12 @@ class BddCoordNode(Node):
                 ctx = self._scenario_contexts[context_id]
                 try:
                     ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
-                    recorder = self._recorders.get(context_id)
-                    if recorder is not None:
-                        recorder.create_record(evt_uri, evt_t)
                 except ValueError as e:
                     self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
+                    continue
+                recorder = self._recorders.get(context_id)
+                if recorder is not None:
+                    recorder.create_record(evt_uri, evt_t)
 
     def bhv_goal_resp_cb(self, future, context_id: UUID):
         goal_handle = future.result()

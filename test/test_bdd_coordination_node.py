@@ -41,6 +41,7 @@ def _open_recorder(session):
     context = SimpleNamespace(
         context_id=uuid4(),
         scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        variation_params={},
         obs_manager=SimpleNamespace(obs_policies={}),
     )
     return RosScenarioExecRecorder.open(
@@ -129,6 +130,26 @@ def test_context_free_event_is_recorded_for_each_active_scenario():
             evt_uri=URIRef("urn:test:event"),
             evt_t=4.0,
         )
+
+
+@pytest.mark.parametrize("error", [ValueError, OSError])
+def test_event_recording_errors_propagate(error):
+    context_id = uuid4()
+    recorder = Mock()
+    recorder.create_record.side_effect = error("recording failed")
+    node = _node(
+        _scenario_contexts={
+            context_id: SimpleNamespace(context_id=context_id, obs_manager=Mock())
+        },
+        _recorders={context_id: recorder},
+        _ns_manager=Graph().namespace_manager,
+        get_logger=Mock(return_value=Mock()),
+    )
+    message = Event()
+    message.uri = "urn:test:event"
+    message.stamp = Time(seconds=4).to_msg()
+    with pytest.raises(error, match="recording failed"):
+        node.evt_sub_cb(message)
 
 
 def test_none_mode_keeps_immediate_variation_execution():
@@ -799,6 +820,7 @@ def test_recording_contexts_have_independent_snapshots_and_lifecycles(
         SimpleNamespace(
             context_id=uuid4(),
             scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+            variation_params={},
             obs_manager=SimpleNamespace(obs_policies={}),
         )
         for _ in range(2)
@@ -814,11 +836,11 @@ def test_recording_contexts_have_independent_snapshots_and_lifecycles(
     assert len(list(tmp_path.iterdir())) == len(contexts) + 1
     from rdflib.namespace import PROV
 
-    dataset = Dataset().parse(tmp_path / "execution.trig", format="trig")
-    bundles = list(dataset.default_graph.subjects(PROV.wasGeneratedBy, None))
-    assert len(set(bundles)) == len(contexts)
     session = node._recording_session
     assert session is not None
+    dataset = Dataset().parse(session.path, format=session.dataset_format)
+    bundles = list(dataset.default_graph.subjects(PROV.wasGeneratedBy, None))
+    assert len(set(bundles)) == len(contexts)
     assert set(dataset.graph(session.model_id)) == set(model)
     assert (
         len(
@@ -842,7 +864,7 @@ def test_recording_contexts_have_independent_snapshots_and_lifecycles(
         assert list(graph.objects(execution_id, PROV.used))
     for context in contexts:
         directory = tmp_path / str(context.context_id)
-        assert (tmp_path / "execution.trig").is_file()
+        assert session.path.is_file()
         records = list(read_journal(directory / "evidence.jsonl"))
         assert {r["execution_id"] for r in records} == {URIRef(context.context_id.urn)}
         assert records[-1]["data"]["termination"] == "finished"
@@ -915,6 +937,7 @@ def test_metadata_save_failure_never_attaches_callbacks_or_registers_recorder(
     context = SimpleNamespace(
         context_id=uuid4(),
         scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        variation_params={},
         obs_manager=SimpleNamespace(obs_policies={URIRef("urn:policy"): policy}),
     )
     node = _node(
@@ -940,6 +963,7 @@ def test_successful_recording_initialization_attaches_policy_callback(tmp_path):
     context = SimpleNamespace(
         context_id=uuid4(),
         scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
+        variation_params={},
         obs_manager=SimpleNamespace(obs_policies={URIRef("urn:policy"): policy}),
     )
     node = _node(

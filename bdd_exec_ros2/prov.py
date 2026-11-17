@@ -42,6 +42,7 @@ class RosScenarioExecRecorder(ScenarioExecRecorder):
             session,
         )
         try:
+            recorder.record_var_assignments(context.variation_params)
             for policy in context.obs_manager.obs_policies.values():
                 recorder.record_policy_config(policy)
             recorder.record_metadata(
