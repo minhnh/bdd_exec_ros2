@@ -19,20 +19,17 @@ import threading
 from collections.abc import Callable, Collection
 from pathlib import Path
 
-from ament_index_python import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from rclpy.client import Client
 from rclpy.impl.rcutils_logger import RcutilsLogger
 from rclpy.node import Node
-from rdf_utils.models.vocab import (
-    URI_EXEC_PRED_PATH,
-)
+from rdf_utils.models.prov import get_linked_file_path
 from rdf_utils.naming import get_valid_var_name
 from rdflib import Graph, URIRef
+from rdflib.namespace import DCTERMS
 from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
 from scene_dsl.rdf_parser.scenex import (
     SceneInstanceModel,
-    get_ros_pkg_path,
 )
 from simulation_interfaces.msg import (
     Result,
@@ -458,15 +455,9 @@ class SimInterface:
             )
 
         resource = resources[0]
-        path_str = resource.get_attr(URI_EXEC_PRED_PATH)
-        if not isinstance(path_str, str):
-            raise TypeError(f"scene model {resource.id} has no path")
-        ros_pkg_path = get_ros_pkg_path(resource)
-        path = (
-            Path(get_package_share_directory(ros_pkg_path[0])) / ros_pkg_path[1]
-            if ros_pkg_path is not None
-            else Path(path_str).expanduser()
-        )
+        path = get_linked_file_path(self._model_graph, resource.id, DCTERMS.source)
+        if path is None:
+            raise ValueError(f"Model '{resource.id}' has no located source file")
 
         state = await self.get_sim_state()
         if state.state == SimulationState.STATE_PLAYING:

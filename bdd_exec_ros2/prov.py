@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Coordinator adapter for scenario evidence; callers hold the coordinator lock."""
 
-import json
-
 from bdd_dsl.prov import ScenarioExecRecorder
 from rdf_utils.models.prov import (
     add_entity,
@@ -35,11 +33,7 @@ class RosScenarioExecRecorder(ScenarioExecRecorder):
     """Record policy evidence; attach callbacks only after host initialization succeeds."""
 
     @classmethod
-    def open(cls, session, node, context, variant, *, scene_setup_mode):
-        parameters = {
-            name: node.get_parameter(name).value
-            for name in node.list_parameters([], depth=0).names
-        }
+    def open(cls, session, context, variant):
         directory = session.output_dir / str(context.context_id)
         directory.mkdir(parents=True, exist_ok=False)
         recorder = cls(
@@ -50,17 +44,8 @@ class RosScenarioExecRecorder(ScenarioExecRecorder):
         try:
             for policy in context.obs_manager.obs_policies.values():
                 recorder.record_policy_config(policy)
-            with (directory / "runtime.json").open("x") as stream:
-                json.dump({"parameters": parameters}, stream, indent=2)
             recorder.record_metadata(
-                variant.id,
-                {
-                    "scenario_configuration": {
-                        "scene_instance": context.scene_inst.id,
-                        "use_sim_time": session.use_sim_time,
-                        "scene_setup_mode": scene_setup_mode,
-                    }
-                },
+                variant.id, {"scene_instance": context.scene_inst.id}
             )
             session.save()
         except BaseException:

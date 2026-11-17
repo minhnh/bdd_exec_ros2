@@ -43,14 +43,10 @@ def _open_recorder(session):
         scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
         obs_manager=SimpleNamespace(obs_policies={}),
     )
-    node = Mock()
-    node.list_parameters.return_value.names = []
     return RosScenarioExecRecorder.open(
         session,
-        node,
         context,
         SimpleNamespace(id=URIRef("urn:variant")),
-        scene_setup_mode="none",
     )
 
 
@@ -854,51 +850,6 @@ def test_recording_contexts_have_independent_snapshots_and_lifecycles(
         with node._scr_lock, pytest.raises(FileExistsError):
             node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
         assert (directory / "evidence.jsonl").read_bytes() == before
-
-
-def test_recording_initialization_failure_propagates_without_registering_a_writer(
-    tmp_path,
-):
-    node = _node(
-        _prov_output_dir=tmp_path,
-        graph=Graph(),
-        list_parameters=Mock(side_effect=OSError("disk full")),
-        get_logger=Mock(return_value=Mock()),
-    )
-    with node._scr_lock, pytest.raises(OSError, match="disk full"):
-        node._open_recording(
-            SimpleNamespace(
-                context_id=uuid4(), obs_manager=SimpleNamespace(obs_policies={})
-            ),
-            None,
-        )
-    assert not node._recorders
-
-
-def test_runtime_snapshot_captures_ros_parameters(tmp_path):
-    import json
-
-    context = SimpleNamespace(
-        context_id=uuid4(),
-        scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
-        obs_manager=SimpleNamespace(obs_policies={}),
-    )
-    parameters = {"use_sim_time": False}
-    node = _node(
-        _prov_output_dir=tmp_path,
-        list_parameters=Mock(return_value=SimpleNamespace(names=list(parameters))),
-        get_parameter=Mock(
-            side_effect=lambda name: SimpleNamespace(value=parameters[name])
-        ),
-    )
-    with node._scr_lock:
-        node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
-    recorder = node._recorders[context.context_id]
-    recorder.close()
-    snapshot = json.loads(
-        (tmp_path / str(context.context_id) / "runtime.json").read_text()
-    )
-    assert snapshot == {"parameters": parameters}
 
 
 def test_shutdown_records_incomplete_termination_under_the_context_lock(tmp_path):

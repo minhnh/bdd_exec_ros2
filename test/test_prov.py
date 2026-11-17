@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 from types import SimpleNamespace
-from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -21,14 +20,10 @@ def _open_recorder(session):
         scene_inst=SimpleNamespace(id=URIRef("urn:scene")),
         obs_manager=SimpleNamespace(obs_policies={}),
     )
-    node = Mock()
-    node.list_parameters.return_value.names = []
     return RosScenarioExecRecorder.open(
         session,
-        node,
         context,
         SimpleNamespace(id=URIRef("urn:variant")),
-        scene_setup_mode="none",
     )
 
 

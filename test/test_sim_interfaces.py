@@ -22,13 +22,12 @@ import pytest
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Pose
 from rdf_utils.models.common import ModelBase
-from rdf_utils.models.execution import get_attr_path
-from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
-from rdflib import URIRef
+from rdf_utils.models.prov import add_file_entity, get_file_path
+from rdflib import Graph, URIRef
+from rdflib.namespace import DCTERMS
 from scene_dsl.langs import scenex_metamodel
 from scene_dsl.rdf.scenex import create_scenex_model_graph
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
-from scene_dsl.rdf_parser.vocab import URI_ROS_PRED_PACKAGE_NAME, URI_ROS_TYPE_PACKAGE
 from simulation_interfaces.msg import (
     EntityState,
     Result,
@@ -109,13 +108,9 @@ def test_load_world_uses_requested_scene_format(monkeypatch):
         node_id=URIRef("urn:test:world"),
         types={SUPPORTED_FORMAT_URIS["usd"]},
     )
-    resource.set_attr(URI_EXEC_PRED_PATH, "world.usd")
-    resource.types.add(URI_ROS_TYPE_PACKAGE)
-    resource.set_attr(URI_ROS_PRED_PACKAGE_NAME, "world_pkg")
-    monkeypatch.setattr(
-        "bdd_exec_ros2.sim_interfaces.get_package_share_directory",
-        lambda package_name: "/share/" + package_name,
-    )
+    graph = Graph()
+    source = add_file_entity(graph, None, "/share/world_pkg/world.usd")
+    graph.add((resource.id, DCTERMS.source, source))
     scene = _scene_with_models({resource.id: resource})
     result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
     load_client = _Client(SimpleNamespace(result=result))
@@ -129,6 +124,7 @@ def test_load_world_uses_requested_scene_format(monkeypatch):
     interface = SimInterface.__new__(SimInterface)
     interface.timeout = 1.0
     interface._node = _Node()
+    interface._model_graph = graph
     interface._load_world_srv_client = load_client
     interface._get_sim_state_srv_client = get_state_client
     interface._set_sim_state_srv_client = set_state_client
@@ -205,7 +201,23 @@ def test_create_spawn_entity_entries_converts_executable_scene_objects():
     )
     for element_id, message in entries:
         [resource] = scene.object_models[element_id].values()
-        assert message.entity_resource.uri == get_attr_path(resource)
+        source = interface._model_graph.value(resource.id, DCTERMS.source)
+        assert (
+            message.entity_resource.uri
+            == get_file_path(interface._model_graph, source).as_uri()
+        )
+
+
+def test_spawn_rejects_models_without_a_source_file():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    interface._model_graph.remove((None, DCTERMS.source, None))
+    with pytest.raises(ValueError, match="source file"):
+        create_spawn_entity_entries(
+            scene, interface._model_graph, {SUPPORTED_FORMAT_URIS["usd"]}
+        )
 
 
 def test_create_spawn_entity_entries_skips_objects_backed_by_loaded_scene_model():

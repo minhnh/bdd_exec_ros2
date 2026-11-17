@@ -23,11 +23,17 @@ launch:
       name: "simulate_collision"
       default: "false"
   - arg:
+      name: "use_sim_time"
+      default: "false"
+  - arg:
       name: "prov_format"
-      default: "trig"
+      default: "json-ld"
   - arg:
       name: "prov_output_dir"
       default: ""
+  - executable:
+      cmd: "ros2 topic pub --rate 100 --print 0 /clock rosgraph_msgs/msg/Clock '{clock: now}'"
+      if: "$(var use_sim_time)"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
@@ -35,6 +41,8 @@ launch:
       name: "test_coordinator"
       param:
         - from: "$(var config)"
+        - name: "use_sim_time"
+          value: "$(var use_sim_time)"
         - name: "prov_format"
           value: "$(var prov_format)"
         - name: "prov_output_dir"
@@ -54,5 +62,7 @@ launch:
       name: "mockup_behaviour"
       param:
         - from: "$(var config)"
+        - name: "use_sim_time"
+          value: "$(var use_sim_time)"
         - name: "simulate_collision"
           value: "$(var simulate_collision)"

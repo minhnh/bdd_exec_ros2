@@ -64,6 +64,7 @@ from rclpy.time import Time
 from rdf_utils import DatasetFormat
 from rdf_utils.models.common import ModelBase
 from rdf_utils.models.prov import (
+    add_entity,
     capture_file_prov,
     get_py_pkg_info,
     get_ros_pkg_info,
@@ -231,9 +232,8 @@ def load_graph_models_in_yaml(
             )
 
     if prov_bundle is not None:
-        collection_id = URIRef(uuid4().urn)
+        collection_id = add_entity(prov_bundle)
         prov_bundle.add((collection_id, RDF.type, PROV.Collection))
-        prov_bundle.add((collection_id, RDF.type, PROV.Entity))
         for source in sources:
             prov_bundle.add((collection_id, PROV.hadMember, source))
         load_transformation_prov(
@@ -305,9 +305,9 @@ class BddCoordNode(Node):
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
         self.declare_parameter("prov_output_dir", "")
-        self.declare_parameter("prov_format", DatasetFormat.TRIG.value)
+        self.declare_parameter("prov_format", DatasetFormat.JSON_LD)
         self.declare_parameter("user_story", "")
-        self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE.value)
+        self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE)
         self.declare_parameter("simulation_service_namespace", "/")
         self.declare_parameter("world_entity_name", "world")
 
@@ -407,6 +407,12 @@ class BddCoordNode(Node):
                 get_py_pkg_info("bdd_exec_ros2").purl,
                 use_sim_time=self._use_sim_time,
                 dataset_format=DatasetFormat(self.get_parameter("prov_format").value),
+                config={
+                    "parameters": {
+                        name: self.get_parameter(name).value
+                        for name in self.list_parameters([], depth=0).names
+                    }
+                },
             )
             self.graph = self._recording_session.model_graph
             prov_bundle = self._recording_session.prov_bundle
@@ -822,10 +828,8 @@ class BddCoordNode(Node):
             return
         recorder = RosScenarioExecRecorder.open(
             self._recording_session,
-            self,
             context,
             scr_var,
-            scene_setup_mode=self._scene_setup_mode.value,
         )
         self._recorders[context.context_id] = recorder
 
