@@ -1018,14 +1018,25 @@ class BddCoordNode(Node):
                         scr_var.scene, value, additional_elements
                     )
 
+                recorder = self._recorders.get(context.context_id)
+                if recorder is None:
+                    sample_graph = self.graph
+                    enable_prov = False
+                else:
+                    sample_graph = recorder.graph
+                    enable_prov = True
                 try:
                     if self._use_sim_time:
+                        assert self._sim_clock is not None
                         self._sim_clock.prepare_wait()
                     await self._sim_interface.setup_scene(
                         context.scene_inst,
                         additional_elements=additional_elements,
+                        sample_graph=sample_graph,
+                        record_prov=enable_prov,
                     )
                     if self._use_sim_time:
+                        assert self._sim_clock is not None
                         await self._sim_clock.wait_for_progress(self.timeout_sec)
                 except Exception as exc:  # noqa: BLE001 - skip failed setup and continue
                     with self._scr_lock:
@@ -1036,8 +1047,14 @@ class BddCoordNode(Node):
                     )
                     continue
                 finally:
-                    if self._use_sim_time:
-                        self._sim_clock.clear_wait()
+                    try:
+                        if recorder is not None:
+                            with self._scr_lock:
+                                recorder.session.save()
+                    finally:
+                        if self._use_sim_time:
+                            assert self._sim_clock is not None
+                            self._sim_clock.clear_wait()
 
                 self._start_scenario_variant(context, scr_var)
                 break

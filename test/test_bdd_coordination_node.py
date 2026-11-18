@@ -262,10 +262,15 @@ def test_scene_setup_failure_cleans_up_and_continues():
 
     asyncio.run(node._prepare_next_scenario())
 
-    assert sim_interface.setup_scene.await_args_list == [
-        call(failed_context.scene_inst, additional_elements={additional}),
-        call(started_context.scene_inst, additional_elements={additional}),
+    setup_calls = sim_interface.setup_scene.await_args_list
+    assert [setup.args for setup in setup_calls] == [
+        (failed_context.scene_inst,),
+        (started_context.scene_inst,),
     ]
+    for setup in setup_calls:
+        assert setup.kwargs["sample_graph"] is node.graph
+        assert setup.kwargs["additional_elements"] == {additional}
+        assert setup.kwargs["record_prov"] is False
     node._remove_context_topic_reg.assert_called_once_with(failed_context.context_id)
     node._start_scenario_variant.assert_called_once_with(
         started_context, started_variation

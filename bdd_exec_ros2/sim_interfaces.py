@@ -634,6 +634,8 @@ class SimInterface:
         scene_inst: SceneInstanceModel,
         *,
         additional_elements: set[URIRef] | None = None,
+        sample_graph: Graph | None = None,
+        record_prov: bool = False,
     ) -> dict[URIRef, str]:
         """Load or reset a scene, spawn selected elements, then start simulation."""
         if self._model_graph is None:
@@ -647,6 +649,8 @@ class SimInterface:
             world_entity_name=self.world_entity_name,
             additional_elements=additional_elements,
             warn=self._logger.warning,
+            sample_graph=sample_graph,
+            record_prov=record_prov,
         )
         if self._active_scene_inst_id == scene_inst.id:
             await self.reset_simulation()

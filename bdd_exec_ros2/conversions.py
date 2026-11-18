@@ -100,6 +100,8 @@ def create_spawn_entity_entries(
     world_entity_name: str = "world",
     additional_elements: set[URIRef] | None = None,
     warn: Callable[[str], object] | None = None,
+    sample_graph: Graph | None = None,
+    record_prov: bool = False,
 ) -> list[tuple[URIRef, SpawnEntityMsg]]:
     """Create spawn messages and retain their source scene element IDs."""
     if not resource_types:
@@ -142,7 +144,12 @@ def create_spawn_entity_entries(
                 )
 
         transform = get_transform_between_frames(
-            root.id, world_body.root_frame.id, graph, rng=rng
+            root.id,
+            world_body.root_frame.id,
+            graph,
+            rng=rng,
+            sample_graph=sample_graph,
+            record_prov=record_prov,
         )
         if transform is None:
             if warn is not None:

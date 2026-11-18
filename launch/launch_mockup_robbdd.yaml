@@ -8,11 +8,14 @@ launch:
       name: "config"
       default: "$(find-pkg-share bdd_exec_ros2)/config/mockup_configs.yaml"
   - arg:
+      name: "simulator"
+      default: "mock"
+      choice:
+        - value: "mock"
+        - value: "external"
+  - arg:
       name: "graph_models"
       default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-robbdd-json.yaml"
-  - arg:
-      name: "scene_setup_mode"
-      default: "none"
   - arg:
       name: "simulation_service_namespace"
       default: "/"
@@ -31,9 +34,15 @@ launch:
   - arg:
       name: "prov_output_dir"
       default: ""
+  - node:
+      pkg: "bdd_exec_ros2"
+      exec: "mockup_simulation_node"
+      namespace: "$(var simulation_service_namespace)"
+      name: "mockup_simulation"
+      if: "$(eval \"'$(var simulator)' == 'mock'\")"
   - executable:
       cmd: "ros2 topic pub --rate 100 --print 0 /clock rosgraph_msgs/msg/Clock '{clock: now}'"
-      if: "$(var use_sim_time)"
+      if: "$(eval \"'$(var simulator)' == 'mock' and '$(var use_sim_time)'.lower() == 'true'\")"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
@@ -50,7 +59,7 @@ launch:
         - name: "graph_models"
           value: "$(var graph_models)"
         - name: "scene_setup_mode"
-          value: "$(var scene_setup_mode)"
+          value: "simulation"
         - name: "simulation_service_namespace"
           value: "$(var simulation_service_namespace)"
         - name: "world_entity_name"
