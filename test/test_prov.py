@@ -117,3 +117,42 @@ def test_package_metadata_is_recorded_once_in_the_shared_loading_bundle(tmp_path
         "rdf_utils",
         "robbdd",
     }
+
+
+def test_execution_recorder_owns_bag_lifecycle(tmp_path):
+    import threading
+    from unittest.mock import Mock, patch
+
+    from bdd_dsl.prov import read_journal
+
+    session = RecordingSession(tmp_path, URIRef("urn:test:agent"), use_sim_time=True)
+    recorder = _open_recorder(session)
+    lock = threading.Lock()
+    topics = {"/data"}
+    node = Mock()
+    with patch("bdd_exec_ros2.prov.BagRecorder") as factory:
+        bag = factory.return_value
+
+        def start_or_stop(*_):
+            assert not lock.locked()
+
+        def add_prov(graph):
+            assert lock.locked()
+            assert graph is recorder.graph
+
+        bag.start.side_effect = start_or_stop
+        bag.stop.side_effect = start_or_stop
+        bag.add_prov.side_effect = add_prov
+        recorder.start_bag(node, topics)
+        factory.assert_called_once_with(
+            recorder.path.parent / "bag",
+            recorder.execution_id,
+            topics,
+            use_sim_time=True,
+        )
+        recorder.finish(node, "finished", lock=lock, stamp=1.0)
+        bag.stop.assert_called_once_with()
+        bag.add_prov.assert_called_once_with(recorder.graph)
+    assert list(read_journal(recorder.path))[-1]["data"]["termination"] == "finished"
+    with pytest.raises(OSError):
+        recorder.create_record(recorder.execution_id, 2.0)

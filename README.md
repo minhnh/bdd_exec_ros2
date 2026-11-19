@@ -101,8 +101,10 @@ ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml \
 
 ### Provenance Recording
 
-Set `prov_output_dir` to record scenario evidence independently of rosbag recording.
-The empty default disables recording.
+Set `prov_output_dir` to record scenario evidence. Its empty default disables recording.
+Set `record_bag:=true` in the mockup launch to also record model-selected topics, `/clock`,
+`/tf`, and `/tf_static` in `<prov_output_dir>/<context-uuid>/bag`. Recording requires
+`prov_output_dir` and starts after scene setup, before behavior execution.
 
 ```bash
 ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml prov_output_dir:=/tmp/bdd-provenance

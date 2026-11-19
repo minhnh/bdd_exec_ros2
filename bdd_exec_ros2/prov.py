@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Coordinator adapter for scenario evidence; callers hold the coordinator lock."""
+"""ROS execution evidence and bag ownership; graph updates use the coordinator lock."""
 
 from bdd_dsl.prov import ScenarioExecRecorder
 from rdf_utils.models.prov import (
@@ -9,6 +9,8 @@ from rdf_utils.models.prov import (
 )
 from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import PROV, SDO
+
+from bdd_exec_ros2.recording import BagRecorder
 
 
 def load_bdd_ros_prov(graph: Graph) -> URIRef:
@@ -30,7 +32,9 @@ def load_bdd_ros_prov(graph: Graph) -> URIRef:
 
 
 class RosScenarioExecRecorder(ScenarioExecRecorder):
-    """Record policy evidence; attach callbacks only after host initialization succeeds."""
+    """Own execution evidence and its optional bag; attach callbacks after initialization."""
+
+    _bag: BagRecorder | None = None
 
     @classmethod
     def open(cls, session, context, variant):
@@ -59,10 +63,38 @@ class RosScenarioExecRecorder(ScenarioExecRecorder):
             policy.prov_recorder = recorder
         return recorder
 
-    def finish(self, node, reason, *, stamp=None):
+    def start_bag(self, node, topics: set[str]):
+        """Start the execution's bag outside the coordinator lock."""
+        bag = BagRecorder(
+            self.path.parent / "bag",
+            self.execution_id,
+            topics,
+            use_sim_time=self.session.use_sim_time,
+        )
+        bag.start(node)
+        self._bag = bag
+
+    def finish(self, node, reason, *, lock, stamp=None):
+        """Finalize the bag outside lock, then save its provenance and close evidence under lock."""
         from bdd_exec_ros2.conversions import ros_time_to_stamp
 
-        if stamp is None:
-            stamp = ros_time_to_stamp(node.get_clock().now())
-        self.create_record(self.execution_id, stamp, {"termination": reason})
-        self.close()
+        try:
+            if self._bag is not None:
+                self._bag.stop()
+        except Exception:
+            reason = "bag_recording_failed"
+            raise
+        finally:
+            with lock:
+                try:
+                    if self._bag is not None and self._bag.ended is not None:
+                        self._bag.add_prov(self.graph)
+                    if stamp is None:
+                        stamp = ros_time_to_stamp(node.get_clock().now())
+                    self.create_record(
+                        self.execution_id, stamp, {"termination": reason}
+                    )
+                    self.close()
+                    self.session.save()
+                finally:
+                    self.close()

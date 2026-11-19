@@ -1,5 +1,4 @@
 import argparse
-import signal
 import subprocess
 import sys
 import time
@@ -7,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
+
+from bdd_exec_ros2.recording import stop_recorder
 
 
 def load_recording(config_path: Path, set_name: str) -> tuple[str, list[str]]:
@@ -28,17 +29,6 @@ def load_recording(config_path: Path, set_name: str) -> tuple[str, list[str]]:
     ):
         raise ValueError("topics must be a non-empty list of absolute ROS topic names")
     return trigger_topic, topics
-
-
-def _stop(recorder: subprocess.Popen) -> None:
-    if recorder.poll() is not None:
-        return
-    recorder.send_signal(signal.SIGINT)
-    try:
-        recorder.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        recorder.terminate()
-        recorder.wait(timeout=5)
 
 
 def main(args=None) -> int:
@@ -116,7 +106,7 @@ def main(args=None) -> int:
     except KeyboardInterrupt:
         return 0
     finally:
-        _stop(recorder)
+        stop_recorder(recorder)
 
 
 if __name__ == "__main__":

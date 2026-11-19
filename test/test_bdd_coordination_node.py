@@ -70,6 +70,7 @@ def _node(**attrs):
             "_user_story": None,
             "_use_sim_time": False,
             "_recorders": {},
+            "_record_bag": False,
             "_scr_lock": threading.Lock(),
             "graph": Graph(identifier=URIRef(uuid4().urn)),
             "_recording_session": session,
@@ -833,7 +834,7 @@ def test_recording_contexts_have_independent_snapshots_and_lifecycles(
     for context in contexts:
         with node._scr_lock:
             node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
-            node._close_recording(context.context_id, "finished", 1.0)
+        node._close_recording(context.context_id, "finished", 1.0)
     assert not node._recorders
     if not enabled:
         assert not list(tmp_path.iterdir())
@@ -879,7 +880,10 @@ def test_recording_contexts_have_independent_snapshots_and_lifecycles(
         assert (directory / "evidence.jsonl").read_bytes() == before
 
 
-def test_shutdown_records_incomplete_termination_under_the_context_lock(tmp_path):
+@pytest.mark.parametrize("bag_error", [None, OSError("bag finalization failed")])
+def test_shutdown_records_incomplete_termination_under_the_context_lock(
+    tmp_path, bag_error
+):
     from bdd_dsl.prov import read_journal
 
     from bdd_exec_ros2.prov import RosScenarioExecRecorder
@@ -895,6 +899,15 @@ def test_shutdown_records_incomplete_termination_under_the_context_lock(tmp_path
         _recorders={context_id: recorder},
         get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=Time()))),
     )
+    bag = Mock(ended=None)
+    recorder._bag = bag
+
+    def stop_bag():
+        assert not node._scr_lock.locked()
+        if bag_error is not None:
+            raise bag_error
+
+    bag.stop.side_effect = stop_bag
     close = recorder.close
 
     def close_with_lock_check():
@@ -902,10 +915,17 @@ def test_shutdown_records_incomplete_termination_under_the_context_lock(tmp_path
         close()
 
     recorder.close = close_with_lock_check
-    with patch("rclpy.node.Node.destroy_node", return_value=True):
-        assert node.destroy_node()
+    with patch("rclpy.node.Node.destroy_node", return_value=True) as destroy:
+        if bag_error is None:
+            assert node.destroy_node()
+        else:
+            with pytest.raises(Exception, match="Recording shutdown failed"):
+                node.destroy_node()
+        destroy.assert_called_once_with()
     assert not node._recorders
-    assert list(read_journal(path))[-1]["data"]["termination"] == "shutdown"
+    bag.stop.assert_called_once_with()
+    termination = "shutdown" if bag_error is None else "bag_recording_failed"
+    assert list(read_journal(path))[-1]["data"]["termination"] == termination
 
 
 def test_status_reads_do_not_record_evaluations():
@@ -980,7 +1000,7 @@ def test_successful_recording_initialization_attaches_policy_callback(tmp_path):
     with node._scr_lock:
         node._open_recording(context, SimpleNamespace(id=URIRef("urn:variant")))
         assert policy.prov_recorder is node._recorders[context.context_id]
-        node._close_recording(context.context_id, "finished", 1.0)
+    node._close_recording(context.context_id, "finished", 1.0)
 
 
 def test_model_loading_records_sources_transformation_and_execution_use(tmp_path):
@@ -1088,3 +1108,88 @@ def test_model_loading_keeps_shared_graph_available_to_robbdd_converters(tmp_pat
     assert set(graph.subjects(RDF.type, URIRef("urn:model"))) == {
         URIRef(str(path)) for path in paths
     }
+
+
+@pytest.mark.parametrize("record_bag", [False, True])
+def test_bag_topics_reuse_context_registrations_before_behavior(record_bag):
+    context_id, other_id = uuid4(), uuid4()
+    context = SimpleNamespace(
+        context_id=context_id,
+        variation_params={},
+        obs_manager=SimpleNamespace(
+            scenario_exec=SimpleNamespace(start_event=URIRef("urn:start"))
+        ),
+    )
+    variant = SimpleNamespace(when_bhv_model=Mock())
+    recorder = Mock()
+    node = _node(
+        _record_bag=record_bag,
+        _scenario_contexts={},
+        _topic_fpolicy_reg={
+            "policy": {context_id: set()},
+            "unrelated": {other_id: set()},
+        },
+        _topic_observation_reg={("observations", object): {context_id: set()}},
+        _recorders={context_id: recorder},
+        resolve_topic_name=lambda topic: (
+            topic if topic.startswith("/") else f"/robot/{topic}"
+        ),
+        _activate_simulation_observations=Mock(),
+        _activate_transform_observations=Mock(),
+        _action_client=Mock(),
+        _send_event=Mock(),
+    )
+
+    def ready(_, topics):
+        assert not node._scr_lock.locked()
+        node._action_client.send_goal_async.assert_not_called()
+        node._send_event.assert_not_called()
+
+    recorder.start_bag.side_effect = ready
+    module = "bdd_exec_ros2.executables.bdd_coordination_node"
+    with (
+        patch(f"{module}.get_bhv_param_messages", return_value=[]),
+        patch(f"{module}.get_cfg_messages", return_value=[]),
+    ):
+        node._start_scenario_variant(context, variant)
+    if record_bag:
+        recorder.start_bag.assert_called_once_with(
+            node,
+            {
+                "/robot/policy",
+                "/robot/observations",
+                "/clock",
+                "/tf",
+                "/tf_static",
+            },
+        )
+    else:
+        recorder.start_bag.assert_not_called()
+    node._action_client.send_goal_async.assert_called_once()
+
+
+def test_bag_start_failure_prevents_behavior_and_closes_evidence():
+    context_id = uuid4()
+    context = SimpleNamespace(context_id=context_id, variation_params={})
+    recorder = Mock()
+    recorder.start_bag.side_effect = OSError("recording unavailable")
+    node = _node(
+        _record_bag=True,
+        _topic_fpolicy_reg={},
+        _topic_observation_reg={},
+        _recorders={context_id: recorder},
+        resolve_topic_name=lambda topic: topic,
+        _remove_context_topic_reg=Mock(),
+        _close_recording=Mock(),
+        _action_client=Mock(),
+    )
+    module = "bdd_exec_ros2.executables.bdd_coordination_node"
+    with (
+        patch(f"{module}.get_bhv_param_messages", return_value=[]),
+        patch(f"{module}.get_cfg_messages", return_value=[]),
+        pytest.raises(OSError),
+    ):
+        node._start_scenario_variant(context, SimpleNamespace(when_bhv_model=Mock()))
+    node._action_client.send_goal_async.assert_not_called()
+    node._remove_context_topic_reg.assert_called_once_with(context_id)
+    node._close_recording.assert_called_once_with(context_id, "bag_start_failed")

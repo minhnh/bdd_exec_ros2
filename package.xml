@@ -8,6 +8,8 @@
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
   <depend>bdd_ros2_interfaces</depend>
   <depend>simulation_interfaces</depend>
   <depend>geometry_msgs</depend>

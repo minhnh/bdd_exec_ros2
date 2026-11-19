@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import threading
+from builtins import ExceptionGroup
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -305,6 +306,7 @@ class BddCoordNode(Node):
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
         self.declare_parameter("prov_output_dir", "")
+        self.declare_parameter("record_bag", False)
         self.declare_parameter("prov_format", DatasetFormat.JSON_LD)
         self.declare_parameter("user_story", "")
         self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE)
@@ -401,6 +403,11 @@ class BddCoordNode(Node):
         output_dir = self.get_parameter("prov_output_dir").value
         if not isinstance(output_dir, str):
             raise TypeError("prov_output_dir must be a string")
+        self._record_bag = self.get_parameter("record_bag").value
+        if not isinstance(self._record_bag, bool):
+            raise TypeError("record_bag must be a bool")
+        if self._record_bag and not output_dir:
+            raise ValueError("record_bag requires prov_output_dir")
         if output_dir:
             self._recording_session = RecordingSession(
                 Path(output_dir),
@@ -480,12 +487,20 @@ class BddCoordNode(Node):
             self._sim_clock = SimulationClockSync(self, on_reset=self._on_clock_reset)
 
     def destroy_node(self):
-        with self._scr_lock:
+        errors = []
+        try:
             for context_id in tuple(self._recorders):
-                self._close_recording(context_id, "shutdown")
-        if self._sim_clock is not None:
-            self._sim_clock.close()
-        return super().destroy_node()
+                try:
+                    self._close_recording(context_id, "shutdown")
+                except Exception as exc:  # noqa: BLE001 - close remaining executions before raising
+                    errors.append(exc)
+        finally:
+            if self._sim_clock is not None:
+                self._sim_clock.close()
+            result = super().destroy_node()
+        if errors:
+            raise ExceptionGroup("Recording shutdown failed", errors)
+        return result
 
     def _on_clock_reset(self, previous_time_ns: int):
         context_ids = tuple(
@@ -538,14 +553,16 @@ class BddCoordNode(Node):
                 if context.goal_handle is not None:
                     context.goal_handle.cancel_goal_async()
                 self._remove_context_topic_reg(context_id=context_id)
-                self._close_recording(context_id, "clock_reset", stamp)
                 del self._scenario_contexts[context_id]
             if status.scenarios:
                 self._pending_scenarios.clear()
                 self._scr_status_pub.publish(status)
-                raise RuntimeError(
-                    "Simulation clock reset after scenario start; active scenarios failed and Behaviour cancellation requested"
-                )
+        for context_id in context_ids:
+            self._close_recording(context_id, "clock_reset", stamp)
+        if status.scenarios:
+            raise RuntimeError(
+                "Simulation clock reset after scenario start; active scenarios failed and Behaviour cancellation requested"
+            )
 
     def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
         mode_value = self.get_parameter("scene_setup_mode").value
@@ -834,10 +851,10 @@ class BddCoordNode(Node):
         self._recorders[context.context_id] = recorder
 
     def _close_recording(self, context_id, reason, stamp=None):
-        recorder = self._recorders.pop(context_id, None)
-        if recorder is None:
-            return
-        recorder.finish(self, reason, stamp=stamp)
+        with self._scr_lock:
+            recorder = self._recorders.pop(context_id, None)
+        if recorder is not None:
+            recorder.finish(self, reason, lock=self._scr_lock, stamp=stamp)
 
     def _update_simulation_observation(
         self,
@@ -964,6 +981,30 @@ class BddCoordNode(Node):
         goal_msg.scenario_context_id = to_uuid_msg(scr_context_id)
         goal_msg.parameters = get_bhv_param_messages(scr_var.when_bhv_model, val_dict)
         goal_msg.configs = get_cfg_messages(scr_var=scr_var, var_value_dict=val_dict)
+        if self._record_bag:
+            with self._scr_lock:
+                topics = {
+                    self.resolve_topic_name(topic)
+                    for topic, contexts in self._topic_fpolicy_reg.items()
+                    if scr_context_id in contexts
+                }
+                topics.update(
+                    self.resolve_topic_name(topic)
+                    for (topic, _), contexts in self._topic_observation_reg.items()
+                    if scr_context_id in contexts
+                )
+            topics.update(
+                self.resolve_topic_name(topic)
+                for topic in ("/clock", "/tf", "/tf_static")
+            )
+            recorder = self._recorders[scr_context_id]
+            try:
+                recorder.start_bag(self, topics)
+            except BaseException:
+                with self._scr_lock:
+                    self._remove_context_topic_reg(scr_context_id)
+                self._close_recording(scr_context_id, "bag_start_failed")
+                raise
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
         self._activate_simulation_observations(context)
@@ -1041,7 +1082,7 @@ class BddCoordNode(Node):
                 except Exception as exc:  # noqa: BLE001 - skip failed setup and continue
                     with self._scr_lock:
                         self._remove_context_topic_reg(context.context_id)
-                        self._close_recording(context.context_id, "setup_failed")
+                    self._close_recording(context.context_id, "setup_failed")
                     self.get_logger().error(
                         f"Scene setup failed for '{scr_var.id}': {exc}"
                     )
@@ -1123,9 +1164,10 @@ class BddCoordNode(Node):
             for ctx_id in finished_ids:
                 self.get_logger().info(f"Scenario {ctx_id.hex} finished, removing...")
                 self._remove_context_topic_reg(context_id=ctx_id)
-                self._close_recording(ctx_id, "finished", now_stamp)
                 del self._scenario_contexts[ctx_id]
 
+        for ctx_id in finished_ids:
+            self._close_recording(ctx_id, "finished", now_stamp)
         self._scr_status_pub.publish(status_msg)
         self._schedule_next_scenario()
 

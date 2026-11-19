@@ -34,6 +34,9 @@ launch:
   - arg:
       name: "prov_output_dir"
       default: ""
+  - arg:
+      name: "record_bag"
+      default: "false"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "mockup_simulation_node"
@@ -52,6 +55,8 @@ launch:
         - from: "$(var config)"
         - name: "use_sim_time"
           value: "$(var use_sim_time)"
+        - name: "record_bag"
+          value: "$(var record_bag)"
         - name: "prov_format"
           value: "$(var prov_format)"
         - name: "prov_output_dir"
