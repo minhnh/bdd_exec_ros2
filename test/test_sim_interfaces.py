@@ -808,10 +808,12 @@ def test_spawn_conversion_preserves_values_with_sampling_provenance():
     before = set(graph)
     original_rng = np.random.default_rng
 
-    def entries(samples, record_prov=False):
+    def entries(samples, record_prov=False, *, seed=42):
         with patch(
             "bdd_exec_ros2.conversions.np.random.default_rng",
-            side_effect=lambda *args: original_rng(*args) if args else original_rng(42),
+            side_effect=lambda *args: (
+                original_rng(*args) if args else original_rng(seed)
+            ),
         ):
             return dict(
                 create_spawn_entity_entries(
@@ -823,7 +825,8 @@ def test_spawn_conversion_preserves_values_with_sampling_provenance():
                 )
             )
 
-    baseline = entries(Graph())
+    baseline = entries(None)
+    assert entries(None, seed=43) != baseline
     samples = Graph()
     assert entries(samples, True) == baseline
     sampled_values = set(samples)

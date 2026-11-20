@@ -267,7 +267,7 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         self.max_force_n = max_force_n
         self.window_seconds = window_seconds
         self._first_stamp: float | None = None
-        self._samples: deque[tuple[float, float]] = deque()
+        self._samples: deque[tuple[ObservationStamped, float]] = deque()
 
     def get_config(self) -> dict[str, object]:
         return {
@@ -279,40 +279,34 @@ class WrenchRmsForceNormWithinLimitEvaluator(ObservationPolicyEvaluator):
         self, observations: list[ObservationStamped]
     ) -> tuple[bool | Trinary | None, dict[str, object]]:
         norm = _wrench_force_norm(observations)
-        stamp = observations[0].stamp
+        sample = observations[0]
+        stamp = sample.stamp
         if self._first_stamp is None:
             self._first_stamp = stamp
-        if self._samples and self._samples[-1][0] == stamp:
-            self._samples[-1] = (stamp, norm * norm)
+        if self._samples and self._samples[-1][0].stamp == stamp:
+            self._samples[-1] = (sample, norm * norm)
         else:
-            self._samples.append((stamp, norm * norm))
+            self._samples.append((sample, norm * norm))
         cutoff = stamp - self.window_seconds
-        while self._samples and self._samples[0][0] < cutoff:
+        while self._samples and self._samples[0][0].stamp < cutoff:
             self._samples.popleft()
+        details = init_sample_details([sample for sample, _ in self._samples])
+        details["force_norm_n"] = norm
         if stamp - self._first_stamp < self.window_seconds:
-            return (
-                None,
-                {
-                    **init_sample_details(observations),
-                    ObsDetailKey.REASON: f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)",
-                    "force_norm_n": norm,
-                    "elapsed_window_s": stamp - self._first_stamp,
-                },
+            details[ObsDetailKey.REASON] = (
+                f"RMS force window warming up ({stamp - self._first_stamp:.3f} s)"
             )
+            details["elapsed_window_s"] = stamp - self._first_stamp
+            return None, details
 
         rms = sqrt(sum(value for _, value in self._samples) / len(self._samples))
         within_limit = rms <= self.max_force_n
         relation = "within" if within_limit else "exceeds"
-        return (
-            within_limit,
-            {
-                **init_sample_details(observations),
-                ObsDetailKey.REASON: f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s",
-                "rms_force_norm_n": rms,
-                "force_norm_n": norm,
-                "sample_count": len(self._samples),
-            },
+        details[ObsDetailKey.REASON] = (
+            f"RMS force norm {rms:.3f} N {relation} {self.max_force_n:.3f} N limit over {self.window_seconds:.3f} s"
         )
+        details["rms_force_norm_n"] = rms
+        return within_limit, details
 
 
 class PlanarContainmentEvaluator(ObservationPolicyEvaluator):

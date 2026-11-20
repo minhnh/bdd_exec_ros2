@@ -217,38 +217,47 @@ def test_wrench_force_norm_evaluator_uses_header_and_inclusive_limit():
 
 
 def test_rms_force_evaluator_accumulates_and_warms_up():
-    message = WrenchStamped()
     observation_uri = URIRef("urn:test:wrench-observation")
     provider_uri = URIRef("urn:test:wrench-provider")
 
     def sample(stamp: float, force: float) -> ObservationStamped:
+        message = WrenchStamped()
         message.wrench.force.x = force
-        return ObservationStamped(
-            observation_uri,
-            provider_uri,
-            stamp,
-            message,
-        )
+        return ObservationStamped(observation_uri, provider_uri, stamp, message)
 
     rms = WrenchRmsForceNormWithinLimitEvaluator()
     config = rms.get_config()
     assert config["max_force_n"] == rms.max_force_n
     assert config["window_seconds"] == rms.window_seconds
     below_limit = config["max_force_n"] / 2
-    first_sample = sample(0.0, below_limit)
-    result, details = rms.evaluate([first_sample])
-    assert result is None
-    assert details[ObsDetailKey.SAMPLE_IDS] == [first_sample.sample_id]
-    assert config.keys().isdisjoint(details)
-    result, details = rms.evaluate([sample(config["window_seconds"], below_limit)])
-    assert result is True
-    assert details["rms_force_norm_n"] == pytest.approx(below_limit)
-    result, details = rms.evaluate(
-        [sample(2 * config["window_seconds"], 2 * config["max_force_n"])]
-    )
-    assert result is False
-    assert config.keys().isdisjoint(details)
-    assert details["rms_force_norm_n"] > config["max_force_n"]
+    first = sample(0.0, below_limit)
+    middle = sample(config["window_seconds"] / 2, below_limit)
+    boundary = sample(config["window_seconds"], below_limit)
+    replacement = sample(boundary.stamp, 0.0)
+    latest = sample(2 * config["window_seconds"], 2 * config["max_force_n"])
+    for current, expected, retained in (
+        (first, None, [first]),
+        (middle, None, [first, middle]),
+        (boundary, True, [first, middle, boundary]),
+        (replacement, True, [first, middle, replacement]),
+        (latest, False, [replacement, latest]),
+    ):
+        result, details = rms.evaluate([current])
+        assert result is expected
+        assert details[ObsDetailKey.SAMPLE_IDS] == [
+            sample.sample_id for sample in retained
+        ]
+        assert details[ObsDetailKey.SAMPLE_STAMPS] == [
+            sample.stamp for sample in retained
+        ]
+        assert details[ObsDetailKey.OBS_IDS] == [
+            sample.observation_uri for sample in retained
+        ]
+        assert config.keys().isdisjoint(details)
+        if result is not None:
+            assert (details["rms_force_norm_n"] <= config["max_force_n"]) is result
+        if current is boundary:
+            assert details["rms_force_norm_n"] == pytest.approx(below_limit)
     assert rms.get_config() == config
 
 

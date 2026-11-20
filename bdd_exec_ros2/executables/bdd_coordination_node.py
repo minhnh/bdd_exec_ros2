@@ -882,8 +882,6 @@ class BddCoordNode(Node):
             for observed_target, model_target in modelled_elem_by_obs_target.items()
             if model_target in poses
         }
-        if not provider_poses:
-            return
         receipt_stamp = ros_time_to_stamp(self.get_clock().now())
         with self._scr_lock:
             if self._scenario_contexts.get(context_id) is not context:
@@ -1061,7 +1059,7 @@ class BddCoordNode(Node):
 
                 recorder = self._recorders.get(context.context_id)
                 if recorder is None:
-                    sample_graph = self.graph
+                    sample_graph = None
                     enable_prov = False
                 else:
                     sample_graph = recorder.graph

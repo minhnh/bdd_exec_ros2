@@ -269,7 +269,7 @@ def test_scene_setup_failure_cleans_up_and_continues():
         (started_context.scene_inst,),
     ]
     for setup in setup_calls:
-        assert setup.kwargs["sample_graph"] is node.graph
+        assert setup.kwargs["sample_graph"] is None
         assert setup.kwargs["additional_elements"] == {additional}
         assert setup.kwargs["record_prov"] is False
     node._remove_context_topic_reg.assert_called_once_with(failed_context.context_id)
@@ -652,11 +652,12 @@ def test_simulation_provider_reports_missing_target_states():
     provider_uri = URIRef("urn:test:provider")
     target_uri = URIRef("urn:test:missing-target")
     logger = Mock()
+    now = Time(seconds=3.0)
     graph = Graph()
     graph.bind("test", "urn:test:")
     context = SimpleNamespace(
         scene_inst=object(),
-        obs_manager=SimpleNamespace(update_provider_observation=Mock()),
+        obs_manager=SimpleNamespace(update_provider_observation=Mock(return_value={})),
         simulation_observations={
             provider_uri: (object(), {URIRef("urn:test:observation"): target_uri})
         },
@@ -666,7 +667,7 @@ def test_simulation_provider_reports_missing_target_states():
         _scenario_contexts={context_id: context},
         graph=graph,
         _ns_manager=graph.namespace_manager,
-        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=Time()))),
+        get_clock=Mock(return_value=SimpleNamespace(now=Mock(return_value=now))),
         get_logger=Mock(return_value=logger),
     )
 
@@ -674,7 +675,9 @@ def test_simulation_provider_reports_missing_target_states():
 
     logger.warning.assert_called_once()
     assert target_uri.n3(graph.namespace_manager) in logger.warning.call_args.args[0]
-    context.obs_manager.update_provider_observation.assert_not_called()
+    context.obs_manager.update_provider_observation.assert_called_once_with(
+        provider_uri, {}, ros_time_to_stamp(now)
+    )
 
 
 def test_simulation_provider_reports_policy_rejection():
