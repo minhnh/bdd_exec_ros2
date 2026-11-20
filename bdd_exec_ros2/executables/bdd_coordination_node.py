@@ -11,16 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 import threading
+from builtins import ExceptionGroup
 from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import rclpy
-from ament_index_python import get_package_share_directory
+import yaml
 from bdd_dsl.models.observation import (
     ObservationManager,
     TrinaryStamped,
@@ -31,6 +33,7 @@ from bdd_dsl.models.variation import (
     collect_variable_scene_elements,
     get_task_var_dicts,
 )
+from bdd_dsl.prov import RecordingSession
 from bdd_dsl.representation import (
     ClauseRepBuilder,
     ScenarioVariantRep,
@@ -59,7 +62,18 @@ from rclpy.node import Node
 from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.time import Time
+from rdf_utils import DatasetFormat
 from rdf_utils.models.common import ModelBase
+from rdf_utils.models.prov import (
+    add_entity,
+    capture_file_prov,
+    get_py_pkg_info,
+    get_ros_pkg_info,
+    load_py_pkg_prov,
+    load_ros_pkg_prov,
+    load_transformation_prov,
+)
+from rdf_utils.models.textx import add_model_prov
 from rdf_utils.models.vocab import (
     URI_ROS_PRED_CHNL_NAME,
     URI_ROS_PRED_TYPE_NAME,
@@ -67,9 +81,10 @@ from rdf_utils.models.vocab import (
     URI_ROS_TYPE_TOPIC,
     URI_ROS_TYPE_TRANSFORM_LISTENER,
 )
+from rdf_utils.resolver import install_resolver
 from rdf_utils.uri import try_expand_curie
 from rdflib import RDF, Graph, URIRef
-from rdflib.namespace import NamespaceManager
+from rdflib.namespace import PROV, NamespaceManager
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
 from scene_dsl.rdf_parser.sensors import get_update_rate
 from std_msgs.msg import Empty as EmptyMsg
@@ -91,6 +106,10 @@ from bdd_exec_ros2.observation import (
     load_ros_action_model,
     load_ros_topic_model,
 )
+from bdd_exec_ros2.prov import (
+    RosScenarioExecRecorder,
+    load_bdd_ros_prov,
+)
 from bdd_exec_ros2.sim_interfaces import PosePollingHandle, SimInterface
 from bdd_exec_ros2.tf_provider import TfPollingHandle, TfProvider
 
@@ -106,11 +125,25 @@ def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
     return not any(context_id.uuid)
 
 
-def load_graph_models_in_yaml(models_yml: str) -> Graph:
-    from pathlib import Path
+def load_graph_models_in_yaml(
+    models_yml: str, model_g: Graph, prov_bundle: Graph | None = None
+) -> None:
+    """Load models and optionally record their source files and transformation.
 
-    import yaml
-    from rdf_utils.resolver import install_resolver
+    Parameters:
+        models_yml: YAML manifest listing model paths and formats.
+        model_g: Destination model graph.
+        prov_bundle: Optional bundle receiving model provenance.
+    """
+    started_at = datetime.now(UTC)
+    sources = set()
+    roots = {}
+    captured = {}
+    packages = {}
+    contributions = set()
+    ros_packages = {}
+    if prov_bundle is not None:
+        packages["bdd_exec_ros2"] = load_bdd_ros_prov(prov_bundle)
 
     yml_p = Path(models_yml)
 
@@ -118,12 +151,16 @@ def load_graph_models_in_yaml(models_yml: str) -> Graph:
         raise FileNotFoundError(
             f"YAML listing graph models is not a file: {models_yml}"
         )
+    if prov_bundle is not None:
+        sources.add(
+            capture_file_prov(prov_bundle, yml_p, roots=roots, captured=captured)
+        )
     with open(yml_p) as yml_f:
         models_list = yaml.safe_load(yml_f)
 
     install_resolver()
 
-    g = Graph()
+    assert isinstance(model_g.identifier, URIRef)
     for model_info in models_list:
         path = model_info.get("path", None)
         if path is None:
@@ -133,9 +170,24 @@ def load_graph_models_in_yaml(models_yml: str) -> Graph:
             pkg_name = model_info.get("package_name", None)
             if pkg_name is None:
                 raise ValueError(f"no 'package_name' specified for ROS path: {path}")
-            pkg_share_path = get_package_share_directory(package_name=pkg_name)
-            path = os.path.join(pkg_share_path, path)
+            if pkg_name not in ros_packages:
+                ros_packages[pkg_name] = (
+                    load_ros_pkg_prov(prov_bundle, pkg_name)
+                    if prov_bundle is not None
+                    else get_ros_pkg_info(pkg_name)
+                )
+            info = ros_packages[pkg_name]
+            directory = info.directory
+            if directory is None:
+                raise FileNotFoundError(
+                    f"ROS package {pkg_name!r} has no share directory"
+                )
+            if prov_bundle is not None:
+                roots[directory] = info.purl
+            path = str(directory / path)
 
+        began = datetime.now(UTC)
+        inputs = set()
         if model_info["format"] == "robbdd":
             from robbdd.rdf.bdd import create_bdd_model_graph
             from robbdd.rdf.bddx import create_bddx_model_graph
@@ -143,22 +195,56 @@ def load_graph_models_in_yaml(models_yml: str) -> Graph:
             from textx.registration import language_for_file
 
             model = metamodel_for_file(path).model_from_file(path)
+            if prov_bundle is not None:
+                inputs = add_model_prov(prov_bundle, model, roots=roots)
+                sources.update(inputs)
             lang = language_for_file(path).name
-
             if lang == "robbdd":
-                create_bdd_model_graph(model=model, g=g)
+                create_bdd_model_graph(model=model, g=model_g)
             elif lang == "robbdd-exec":
-                create_bddx_model_graph(model=model, g=g)
+                create_bddx_model_graph(model=model, g=model_g)
             else:
                 raise ValueError(
                     f"unsupported language '{lang}' for RobBDD model '{path}'"
                 )
-            continue
+            tool = "robbdd"
+        else:
+            if prov_bundle is not None:
+                inputs = {
+                    capture_file_prov(prov_bundle, path, roots=roots, captured=captured)
+                }
+                sources.update(inputs)
+            model_g.parse(path, format=model_info["format"])
+            tool = "rdflib"
 
-        # assuming model can be loaded using rdflib
-        g.parse(path, format=model_info["format"])
+        if prov_bundle is not None:
+            contribution_id = URIRef(uuid4().urn)
+            contributions.add(contribution_id)
+            if tool not in packages:
+                packages[tool] = load_py_pkg_prov(prov_bundle, tool).purl
+            load_transformation_prov(
+                prov_bundle,
+                inputs,
+                {contribution_id},
+                packages[tool],
+                started=began,
+                ended=datetime.now(UTC),
+                influenced={model_g.identifier},
+            )
 
-    return g
+    if prov_bundle is not None:
+        collection_id = add_entity(prov_bundle)
+        prov_bundle.add((collection_id, RDF.type, PROV.Collection))
+        for source in sources:
+            prov_bundle.add((collection_id, PROV.hadMember, source))
+        load_transformation_prov(
+            prov_bundle,
+            {collection_id, *contributions},
+            {model_g.identifier},
+            packages["bdd_exec_ros2"],
+            started=started_at,
+            ended=datetime.now(UTC),
+        )
 
 
 @dataclass
@@ -219,8 +305,11 @@ class BddCoordNode(Node):
         self.declare_parameter("status_topic", "status")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
+        self.declare_parameter("prov_output_dir", "")
+        self.declare_parameter("record_bag", False)
+        self.declare_parameter("prov_format", DatasetFormat.JSON_LD)
         self.declare_parameter("user_story", "")
-        self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE.value)
+        self.declare_parameter("scene_setup_mode", SceneSetupMode.NONE)
         self.declare_parameter("simulation_service_namespace", "/")
         self.declare_parameter("world_entity_name", "world")
 
@@ -310,7 +399,37 @@ class BddCoordNode(Node):
                 f"expected str 'graph_models' file name param, got: {type(g_models_yml)}"
             )
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
-        self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
+
+        output_dir = self.get_parameter("prov_output_dir").value
+        if not isinstance(output_dir, str):
+            raise TypeError("prov_output_dir must be a string")
+        self._record_bag = self.get_parameter("record_bag").value
+        if not isinstance(self._record_bag, bool):
+            raise TypeError("record_bag must be a bool")
+        if self._record_bag and not output_dir:
+            raise ValueError("record_bag requires prov_output_dir")
+        if output_dir:
+            self._recording_session = RecordingSession(
+                Path(output_dir),
+                get_py_pkg_info("bdd_exec_ros2").purl,
+                use_sim_time=self._use_sim_time,
+                dataset_format=DatasetFormat(self.get_parameter("prov_format").value),
+                config={
+                    "parameters": {
+                        name: self.get_parameter(name).value
+                        for name in self.list_parameters([], depth=0).names
+                    }
+                },
+            )
+            self.graph = self._recording_session.model_graph
+            prov_bundle = self._recording_session.prov_bundle
+        else:
+            self._recording_session = None
+            self.graph = Graph(identifier=URIRef(uuid4().urn))
+            prov_bundle = None
+        load_graph_models_in_yaml(g_models_yml, self.graph, prov_bundle)
+
+        self._recorders: dict[UUID, RosScenarioExecRecorder] = {}
         self._tf_provider = (
             TfProvider(
                 self,
@@ -368,9 +487,20 @@ class BddCoordNode(Node):
             self._sim_clock = SimulationClockSync(self, on_reset=self._on_clock_reset)
 
     def destroy_node(self):
-        if self._sim_clock is not None:
-            self._sim_clock.close()
-        return super().destroy_node()
+        errors = []
+        try:
+            for context_id in tuple(self._recorders):
+                try:
+                    self._close_recording(context_id, "shutdown")
+                except Exception as exc:  # noqa: BLE001 - close remaining executions before raising
+                    errors.append(exc)
+        finally:
+            if self._sim_clock is not None:
+                self._sim_clock.close()
+            result = super().destroy_node()
+        if errors:
+            raise ExceptionGroup("Recording shutdown failed", errors)
+        return result
 
     def _on_clock_reset(self, previous_time_ns: int):
         context_ids = tuple(
@@ -405,6 +535,12 @@ class BddCoordNode(Node):
                     )
                 )
                 manager.on_event(manager.scenario_exec.end_event, stamp)
+                recorder = self._recorders.get(context_id)
+                if recorder is not None:
+                    recorder.create_record(manager.scenario_exec.end_event, stamp)
+                assert isinstance(status.scenarios, list), (
+                    "ScenarioStatusList.scenarios not a list"
+                )
                 status.scenarios.append(
                     to_scenario_status_msg(
                         ctx_id=context_id,
@@ -421,9 +557,12 @@ class BddCoordNode(Node):
             if status.scenarios:
                 self._pending_scenarios.clear()
                 self._scr_status_pub.publish(status)
-                raise RuntimeError(
-                    "Simulation clock reset after scenario start; active scenarios failed and Behaviour cancellation requested"
-                )
+        for context_id in context_ids:
+            self._close_recording(context_id, "clock_reset", stamp)
+        if status.scenarios:
+            raise RuntimeError(
+                "Simulation clock reset after scenario start; active scenarios failed and Behaviour cancellation requested"
+            )
 
     def _resolve_scene_setup(self) -> tuple[SceneSetupMode, SimInterface | None]:
         mode_value = self.get_parameter("scene_setup_mode").value
@@ -599,7 +738,7 @@ class BddCoordNode(Node):
             )
 
     def _create_observation_subscription(
-        self, provider: ModelBase, context_id: UUID, obs_manager: ObservationManager
+        self, provider: ModelBase, context_id: UUID
     ) -> None:
         if URI_ROS_TYPE_TOPIC not in provider.types:
             return
@@ -652,7 +791,6 @@ class BddCoordNode(Node):
                 self._create_observation_subscription(
                     provider=provider,
                     context_id=scr_context_id,
-                    obs_manager=obs_manager,
                 )
             elif URI_ROS_TYPE_SIM_ENTITY_STATE_PROVIDER in provider.types:
                 simulation_rates[provider_uri] = get_update_rate(self.graph, provider)
@@ -698,7 +836,25 @@ class BddCoordNode(Node):
                 modelled_elem_by_obs_target,
             )
         context.transform_observations.update(transform_configs)
+        with self._scr_lock:
+            self._open_recording(context, scr_var)
         return context
+
+    def _open_recording(self, context, scr_var):
+        if self._recording_session is None:
+            return
+        recorder = RosScenarioExecRecorder.open(
+            self._recording_session,
+            context,
+            scr_var,
+        )
+        self._recorders[context.context_id] = recorder
+
+    def _close_recording(self, context_id, reason, stamp=None):
+        with self._scr_lock:
+            recorder = self._recorders.pop(context_id, None)
+        if recorder is not None:
+            recorder.finish(self, reason, lock=self._scr_lock, stamp=stamp)
 
     def _update_simulation_observation(
         self,
@@ -726,8 +882,6 @@ class BddCoordNode(Node):
             for observed_target, model_target in modelled_elem_by_obs_target.items()
             if model_target in poses
         }
-        if not provider_poses:
-            return
         receipt_stamp = ros_time_to_stamp(self.get_clock().now())
         with self._scr_lock:
             if self._scenario_contexts.get(context_id) is not context:
@@ -825,6 +979,30 @@ class BddCoordNode(Node):
         goal_msg.scenario_context_id = to_uuid_msg(scr_context_id)
         goal_msg.parameters = get_bhv_param_messages(scr_var.when_bhv_model, val_dict)
         goal_msg.configs = get_cfg_messages(scr_var=scr_var, var_value_dict=val_dict)
+        if self._record_bag:
+            with self._scr_lock:
+                topics = {
+                    self.resolve_topic_name(topic)
+                    for topic, contexts in self._topic_fpolicy_reg.items()
+                    if scr_context_id in contexts
+                }
+                topics.update(
+                    self.resolve_topic_name(topic)
+                    for (topic, _), contexts in self._topic_observation_reg.items()
+                    if scr_context_id in contexts
+                )
+            topics.update(
+                self.resolve_topic_name(topic)
+                for topic in ("/clock", "/tf", "/tf_static")
+            )
+            recorder = self._recorders[scr_context_id]
+            try:
+                recorder.start_bag(self, topics)
+            except BaseException:
+                with self._scr_lock:
+                    self._remove_context_topic_reg(scr_context_id)
+                self._close_recording(scr_context_id, "bag_start_failed")
+                raise
         with self._scr_lock:
             self._scenario_contexts[context.context_id] = context
         self._activate_simulation_observations(context)
@@ -879,25 +1057,43 @@ class BddCoordNode(Node):
                         scr_var.scene, value, additional_elements
                     )
 
+                recorder = self._recorders.get(context.context_id)
+                if recorder is None:
+                    sample_graph = None
+                    enable_prov = False
+                else:
+                    sample_graph = recorder.graph
+                    enable_prov = True
                 try:
                     if self._use_sim_time:
+                        assert self._sim_clock is not None
                         self._sim_clock.prepare_wait()
                     await self._sim_interface.setup_scene(
                         context.scene_inst,
                         additional_elements=additional_elements,
+                        sample_graph=sample_graph,
+                        record_prov=enable_prov,
                     )
                     if self._use_sim_time:
+                        assert self._sim_clock is not None
                         await self._sim_clock.wait_for_progress(self.timeout_sec)
                 except Exception as exc:  # noqa: BLE001 - skip failed setup and continue
                     with self._scr_lock:
                         self._remove_context_topic_reg(context.context_id)
+                    self._close_recording(context.context_id, "setup_failed")
                     self.get_logger().error(
                         f"Scene setup failed for '{scr_var.id}': {exc}"
                     )
                     continue
                 finally:
-                    if self._use_sim_time:
-                        self._sim_clock.clear_wait()
+                    try:
+                        if recorder is not None:
+                            with self._scr_lock:
+                                recorder.session.save()
+                    finally:
+                        if self._use_sim_time:
+                            assert self._sim_clock is not None
+                            self._sim_clock.clear_wait()
 
                 self._start_scenario_variant(context, scr_var)
                 break
@@ -968,6 +1164,8 @@ class BddCoordNode(Node):
                 self._remove_context_topic_reg(context_id=ctx_id)
                 del self._scenario_contexts[ctx_id]
 
+        for ctx_id in finished_ids:
+            self._close_recording(ctx_id, "finished", now_stamp)
         self._scr_status_pub.publish(status_msg)
         self._schedule_next_scenario()
 
@@ -1041,6 +1239,10 @@ class BddCoordNode(Node):
                     ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
                 except ValueError as e:
                     self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
+                    continue
+                recorder = self._recorders.get(context_id)
+                if recorder is not None:
+                    recorder.create_record(evt_uri, evt_t)
 
     def bhv_goal_resp_cb(self, future, context_id: UUID):
         goal_handle = future.result()
@@ -1113,6 +1315,17 @@ class BddCoordNode(Node):
             ctx = self._scenario_contexts[context_id]
             if trin_st is not None:
                 ctx.obs_manager.update_bhv_result(trin_st=trin_st)
+                recorder = self._recorders.get(context_id)
+                if recorder is not None:
+                    recorder.create_record(
+                        ctx.obs_manager.scenario_exec.bhv_impl.id,
+                        trin_st.stamp,
+                        {
+                            "action_status": future.result().status,
+                            "result": TRINARY_NAMES[trin_val],
+                            "reason": trin_st.reason,
+                        },
+                    )
 
 
 def main(args=None):
@@ -1121,12 +1334,17 @@ def main(args=None):
     else:
         node_name = getattr(args, "node_name", __DEFAULT_NODE_NAME)
 
+    mockup_bhv_node = None
     try:
         rclpy.init(args=args)
         mockup_bhv_node = BddCoordNode(node_name=node_name)
         rclpy.spin(mockup_bhv_node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    finally:
+        if mockup_bhv_node is not None:
+            mockup_bhv_node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

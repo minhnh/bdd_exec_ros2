@@ -16,29 +16,36 @@ import asyncio
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Pose
 from rdf_utils.models.common import ModelBase
-from rdf_utils.models.execution import get_attr_path
-from rdf_utils.models.vocab import URI_EXEC_PRED_PATH
-from rdflib import URIRef
+from rdf_utils.models.prov import add_file_entity, get_file_path
+from rdflib import Graph, URIRef
+from rdflib.namespace import DCTERMS
 from scene_dsl.langs import scenex_metamodel
 from scene_dsl.rdf.scenex import create_scenex_model_graph
 from scene_dsl.rdf_parser.scenex import SceneInstanceModel
-from scene_dsl.rdf_parser.vocab import URI_ROS_PRED_PACKAGE_NAME, URI_ROS_TYPE_PACKAGE
 from simulation_interfaces.msg import (
     EntityState,
     Result,
     SimulationState,
     SimulatorFeatures,
 )
-from simulation_interfaces.srv import ResetSimulation
+from simulation_interfaces.srv import (
+    GetSimulationState,
+    GetSimulatorFeatures,
+    LoadWorld,
+    ResetSimulation,
+    SetSimulationState,
+    SpawnEntity,
+)
 from std_msgs.msg import Header
 
 from bdd_exec_ros2.conversions import create_spawn_entity_entries, format_time_msg
+from bdd_exec_ros2.executables.mockup_simulation_node import MockupSimulationNode
 from bdd_exec_ros2.executables.sim_interface_test import Command, _parse_args
 from bdd_exec_ros2.sim_interfaces import (
     SUPPORTED_FORMAT_URIS,
@@ -73,7 +80,8 @@ class _Client:
     def call_async(self, request):
         self.request = request
         self.requests.append(request)
-        return _Future(self.response)
+        response = self.response(request) if callable(self.response) else self.response
+        return _Future(response)
 
 
 class _Node:
@@ -104,18 +112,48 @@ def _scene_with_models(models, scene_id="urn:test:scene"):
     return SimpleNamespace(id=scene_id, models=models)
 
 
+@pytest.fixture
+def simulator():
+    with (
+        patch(
+            "bdd_exec_ros2.executables.mockup_simulation_node.Node.__init__",
+            return_value=None,
+        ),
+        patch.object(MockupSimulationNode, "create_service"),
+    ):
+        return MockupSimulationNode()
+
+
+def _attach_simulator(interface, simulator):
+    for attr, service, handler in (
+        ("_sim_feature_srv_client", GetSimulatorFeatures, simulator.get_features),
+        ("_get_sim_state_srv_client", GetSimulationState, simulator.get_state),
+        ("_set_sim_state_srv_client", SetSimulationState, simulator.set_state),
+        ("_load_world_srv_client", LoadWorld, simulator.load_world),
+        ("_reset_simulation_srv_client", ResetSimulation, simulator.reset),
+        ("_spawn_entity_srv_client", SpawnEntity, simulator.spawn_entity),
+    ):
+        setattr(
+            interface,
+            attr,
+            _Client(
+                lambda request, srv=service, callback=handler: callback(
+                    request, srv.Response()
+                )
+            ),
+        )
+    interface._sim_features = None
+    interface._spawn_entities_srv_client = _Client(None, available=False)
+
+
 def test_load_world_uses_requested_scene_format(monkeypatch):
     resource = ModelBase(
         node_id=URIRef("urn:test:world"),
         types={SUPPORTED_FORMAT_URIS["usd"]},
     )
-    resource.set_attr(URI_EXEC_PRED_PATH, "world.usd")
-    resource.types.add(URI_ROS_TYPE_PACKAGE)
-    resource.set_attr(URI_ROS_PRED_PACKAGE_NAME, "world_pkg")
-    monkeypatch.setattr(
-        "bdd_exec_ros2.sim_interfaces.get_package_share_directory",
-        lambda package_name: "/share/" + package_name,
-    )
+    graph = Graph()
+    source = add_file_entity(graph, None, "/share/world_pkg/world.usd")
+    graph.add((resource.id, DCTERMS.source, source))
     scene = _scene_with_models({resource.id: resource})
     result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
     load_client = _Client(SimpleNamespace(result=result))
@@ -129,6 +167,7 @@ def test_load_world_uses_requested_scene_format(monkeypatch):
     interface = SimInterface.__new__(SimInterface)
     interface.timeout = 1.0
     interface._node = _Node()
+    interface._model_graph = graph
     interface._load_world_srv_client = load_client
     interface._get_sim_state_srv_client = get_state_client
     interface._set_sim_state_srv_client = set_state_client
@@ -205,7 +244,23 @@ def test_create_spawn_entity_entries_converts_executable_scene_objects():
     )
     for element_id, message in entries:
         [resource] = scene.object_models[element_id].values()
-        assert message.entity_resource.uri == get_attr_path(resource)
+        source = interface._model_graph.value(resource.id, DCTERMS.source)
+        assert (
+            message.entity_resource.uri
+            == get_file_path(interface._model_graph, source).as_uri()
+        )
+
+
+def test_spawn_rejects_models_without_a_source_file():
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    interface._model_graph.remove((None, DCTERMS.source, None))
+    with pytest.raises(ValueError, match="source file"):
+        create_spawn_entity_entries(
+            scene, interface._model_graph, {SUPPORTED_FORMAT_URIS["usd"]}
+        )
 
 
 def test_create_spawn_entity_entries_skips_objects_backed_by_loaded_scene_model():
@@ -302,22 +357,27 @@ def test_create_spawn_entity_entries_uses_loaded_objects_and_additional_elements
     assert any("missing-cube" in warning for warning in warnings)
 
 
-def test_spawn_entities_uses_legacy_service_when_batch_is_not_advertised():
-    features = SimpleNamespace(
-        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
-    )
-    interface, scene = _spawn_interface(features)
-    result = SimpleNamespace(result=Result.RESULT_OK, error_message="")
-    interface._spawn_entity_srv_client = _Client(
-        SimpleNamespace(result=result, entity_name="spawned")
-    )
-    interface._spawn_entities_srv_client = _Client(None)
-
+def test_spawn_entities_uses_legacy_service_when_batch_is_not_advertised(simulator):
+    interface, scene = _spawn_interface(None)
+    _attach_simulator(interface, simulator)
     spawned = asyncio.run(interface.spawn_entities(scene))
-
     assert set(spawned) == set(scene.object_models)
+    assert set(spawned.values()) == set(simulator.entities)
     assert len(interface._spawn_entity_srv_client.requests) == len(scene.object_models)
     assert not interface._spawn_entities_srv_client.requests
+
+    missing = simulator.spawn_entity(
+        SpawnEntity.Request(name="object"), SpawnEntity.Response()
+    )
+    assert missing.result.result == SpawnEntity.Response.NO_RESOURCE
+    name, request = next(iter(simulator.entities.items()))
+    rejected = simulator.spawn_entity(request, SpawnEntity.Response())
+    assert rejected.result.result == SpawnEntity.Response.NAME_NOT_UNIQUE
+    request.allow_renaming = True
+    renamed = simulator.spawn_entity(request, SpawnEntity.Response())
+    assert renamed.result.result == Result.RESULT_OK
+    assert renamed.entity_name != name
+    assert len(simulator.entities) == len(spawned) + 1
 
 
 def test_spawn_entities_prefers_batch_service():
@@ -594,30 +654,51 @@ def test_reset_simulation_does_not_stop_an_already_stopped_simulation():
     interface.set_sim_state.assert_not_awaited()
 
 
-def test_setup_scene_loads_then_resets_same_instance():
-    features = SimpleNamespace(
-        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
-    )
-    interface, scene = _spawn_interface(features)
-    interface.load_world = AsyncMock(return_value=Path("world.usd"))
-    interface.reset_simulation = AsyncMock(return_value=None)
-    interface._send_spawn_entries = AsyncMock(return_value={})
-    interface.set_sim_state = AsyncMock(return_value=None)
+def test_setup_scene_loads_then_resets_same_instance(simulator):
+    interface, scene = _spawn_interface(None)
+    _attach_simulator(interface, simulator)
+    samples = Graph()
 
-    assert asyncio.run(interface.setup_scene(scene)) == {}
-    interface.load_world.assert_awaited_once_with(scene)
-    interface.reset_simulation.assert_not_awaited()
+    first = asyncio.run(interface.setup_scene(scene, sample_graph=samples))
+    assert set(first) == set(scene.object_models)
+    assert set(first.values()) == set(simulator.entities)
+    assert simulator.state == SimulationState.STATE_PLAYING
+    assert simulator.world_uri
+    assert len(interface._load_world_srv_client.requests) == 1
+    assert not interface._reset_simulation_srv_client.requests
+    for name, request in simulator.entities.items():
+        assert name == request.name
 
-    assert asyncio.run(interface.setup_scene(scene)) == {}
-    interface.load_world.assert_awaited_once_with(scene)
-    interface.reset_simulation.assert_awaited_once_with()
-    entries, sent_features = interface._send_spawn_entries.await_args.args
-    assert {elem_id for elem_id, _ in entries} == set(scene.object_models)
-    assert sent_features is features
-    assert [call.args[0].state for call in interface.set_sim_state.await_args_list] == [
-        SimulationState.STATE_PLAYING,
-        SimulationState.STATE_PLAYING,
-    ]
+    second = asyncio.run(interface.setup_scene(scene, sample_graph=samples))
+    assert second == first
+    assert len(interface._load_world_srv_client.requests) == 1
+    assert len(interface._reset_simulation_srv_client.requests) == 1
+    assert set(second.values()) == set(simulator.entities)
+    assert simulator.state == SimulationState.STATE_PLAYING
+
+    before = (simulator.state, simulator.world_uri, dict(simulator.entities))
+    for handler, request, response, expected in (
+        (
+            simulator.load_world,
+            LoadWorld.Request(),
+            LoadWorld.Response(),
+            LoadWorld.Response.NO_RESOURCE,
+        ),
+        (
+            simulator.set_state,
+            SetSimulationState.Request(state=SimulationState(state=255)),
+            SetSimulationState.Response(),
+            Result.RESULT_FEATURE_UNSUPPORTED,
+        ),
+        (
+            simulator.reset,
+            ResetSimulation.Request(scope=ResetSimulation.Request.SCOPE_TIME),
+            ResetSimulation.Response(),
+            Result.RESULT_FEATURE_UNSUPPORTED,
+        ),
+    ):
+        assert handler(request, response).result.result == expected
+        assert (simulator.state, simulator.world_uri, simulator.entities) == before
 
 
 def test_setup_scene_reloads_changed_instance():
@@ -710,3 +791,47 @@ def test_format_time_msg_distinguishes_wall_and_sim_time():
     for num_decimals in (0, 10):
         with pytest.raises(ValueError, match="between 1 and 9"):
             format_time_msg(stamp, num_decimals=num_decimals)
+
+
+def test_spawn_conversion_preserves_values_with_sampling_provenance():
+    from unittest.mock import patch
+
+    import numpy as np
+    from rdf_utils.models.vocab import URI_PROV_EXT_TYPE_GENERALIZATION
+    from rdflib import RDF
+
+    features = SimpleNamespace(
+        features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"]
+    )
+    interface, scene = _spawn_interface(features)
+    graph = interface._model_graph
+    before = set(graph)
+    original_rng = np.random.default_rng
+
+    def entries(samples, record_prov=False, *, seed=42):
+        with patch(
+            "bdd_exec_ros2.conversions.np.random.default_rng",
+            side_effect=lambda *args: (
+                original_rng(*args) if args else original_rng(seed)
+            ),
+        ):
+            return dict(
+                create_spawn_entity_entries(
+                    scene,
+                    graph,
+                    {SUPPORTED_FORMAT_URIS["usd"]},
+                    sample_graph=samples,
+                    record_prov=record_prov,
+                )
+            )
+
+    baseline = entries(None)
+    assert entries(None, seed=43) != baseline
+    samples = Graph()
+    assert entries(samples, True) == baseline
+    sampled_values = set(samples)
+    assert entries(samples, True) == baseline
+    assert set(samples) == sampled_values
+    assert set(graph) == before
+    activities = set(samples.subjects(RDF.type, URI_PROV_EXT_TYPE_GENERALIZATION))
+    assert activities
