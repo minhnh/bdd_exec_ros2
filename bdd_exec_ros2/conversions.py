@@ -13,13 +13,11 @@
 # limitations under the License.
 
 from collections.abc import Callable, Iterable
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any, Final
 from uuid import UUID
 
 import numpy as np
-from ament_index_python import get_package_share_directory
 from bdd_dsl.models.clauses import WhenBehaviourModel, get_clause_config
 from bdd_dsl.models.observation import (
     ObservationManager,
@@ -51,13 +49,16 @@ from bdd_ros2_interfaces.msg import (
 )
 from builtin_interfaces.msg import Time as TimeMsg
 from rclpy.time import Time
-from rdf_utils.models.execution import get_attr_path
 from rdf_utils.models.geom_coord import get_transform_between_frames
+from rdf_utils.models.prov import (
+    capture_resolved_source_prov,
+    resolve_location,
+)
 from rdf_utils.naming import get_valid_var_name
 from rdflib import Graph, URIRef
+from rdflib.namespace import DCTERMS
 from scene_dsl.rdf_parser.scenex import (
     SceneInstanceModel,
-    get_ros_pkg_path,
 )
 from scipy.spatial.transform import RigidTransform
 from simulation_interfaces.msg import SpawnEntity as SpawnEntityMsg
@@ -102,6 +103,8 @@ def create_spawn_entity_entries(
     world_entity_name: str = "world",
     additional_elements: set[URIRef] | None = None,
     warn: Callable[[str], object] | None = None,
+    sample_graph: Graph | None = None,
+    record_prov: bool = False,
 ) -> list[tuple[URIRef, SpawnEntityMsg]]:
     """Create spawn messages and retain their source scene element IDs."""
     if not resource_types:
@@ -117,6 +120,7 @@ def create_spawn_entity_entries(
 
     rng = np.random.default_rng()
     entries = []
+    roots, captured = {}, {}
     element_ids = (
         scene_inst.scene_model.objects
         | scene_inst.scene_model.agents
@@ -144,7 +148,12 @@ def create_spawn_entity_entries(
                 )
 
         transform = get_transform_between_frames(
-            root.id, world_body.root_frame.id, graph, rng=rng
+            root.id,
+            world_body.root_frame.id,
+            graph,
+            rng=rng,
+            sample_graph=sample_graph,
+            record_prov=record_prov,
         )
         if transform is None:
             if warn is not None:
@@ -153,15 +162,18 @@ def create_spawn_entity_entries(
                 )
             continue
 
-        ros_path = get_ros_pkg_path(resource)
-        if ros_path is not None:
-            resource_uri = (
-                Path(get_package_share_directory(ros_path[0])) / ros_path[1]
-            ).as_uri()
-        else:
-            resource_uri = get_attr_path(resource)
-            if not resource_uri.startswith(("http://", "https://")):
-                resource_uri = Path(resource_uri).expanduser().resolve().as_uri()
+        source = graph.value(resource.id, DCTERMS.source)
+        if source is None:
+            raise ValueError(f"Model '{resource.id}' has no located source file")
+        resource_uri = str(resolve_location(graph, source))
+        if record_prov:
+            assert sample_graph is not None
+            capture_resolved_source_prov(
+                sample_graph,
+                resource_uri,
+                roots=roots,
+                captured=captured,
+            )
 
         entries.append(
             (
@@ -197,7 +209,7 @@ def format_time_msg(
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{fraction}"
 
-    return datetime.fromtimestamp(msg.sec, tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(msg.sec, tz=UTC).strftime(
         format_str.replace("%f", fraction)
     )
 

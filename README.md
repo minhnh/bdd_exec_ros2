@@ -71,7 +71,9 @@ from RDF graphs or RobBDD sources and, when triggered, sends a goal for each sce
 Leave it empty to run all stories; use it when imported contracts also contain
 reference scenarios that should not run in this execution setup.
 
-By default, `scene_setup_mode` is `none` and variations retain their concurrent execution behavior.
+The coordinator defaults to `scene_setup_mode=none`, retaining concurrent variation execution.
+The RobBDD mockup launch defaults to its built-in mock service; set `simulator:=external`
+to use a running simulator for scene setup. Both modes retain topic-based mock observations.
 Set it to `simulation` to prepare variations sequentially through `SimInterface`: the coordinator
 loads or resets the exact scene instance, spawns its invariant and variable-selected elements, and
 starts the behaviour only after setup succeeds. `simulation_service_namespace` defaults
@@ -92,10 +94,43 @@ For example, with a working simulator exposing ROS 2 `simulation_interfaces` ser
 
 ```bash
 ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml \
-  scene_setup_mode:=simulation \
+  simulator:=external use_sim_time:=true \
   simulation_service_namespace:=/ \
   world_entity_name:=world
 ```
+
+### Provenance Recording
+
+Set `prov_output_dir` to record scenario evidence. Its empty default disables recording.
+Set `record_bag:=true` in the mockup launch to also record model-selected topics, `/clock`,
+`/tf`, and `/tf_static` in `<prov_output_dir>/<context-uuid>/bag`. Recording requires
+`prov_output_dir` and starts after scene setup, before behavior execution.
+
+```bash
+ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml prov_output_dir:=/tmp/bdd-provenance
+```
+
+Set `use_sim_time:=true` to use simulation time. Mock mode publishes a wall-time-paced
+`/clock`; external mode uses the simulator's clock.
+The default is wall-clock time without a clock publisher.
+
+Recording creates `execution.ld.json` with model, source-file, package and execution provenance, plus
+`<context-uuid>/evidence.jsonl` for each scenario execution. Node parameters are captured once
+in the shared provenance bundle.
+Set `prov_format` to `trig` or `nquads` to change the dataset format.
+To test pose sampling without a simulator, keep the topic-based model and run:
+
+```sh
+ros2 launch bdd_exec_ros2 launch_mockup_robbdd.yaml \
+  prov_output_dir:=/tmp/bdd-sampling
+```
+
+Mock mode starts its setup service and samples poses. It retains spawn poses without physics
+or entity-state queries. External mode starts no mock simulator or clock publisher.
+To test simulator entity-state observations, explicitly set `graph_models` to the
+`models/pickplace-models-robbdd-sim.yaml` manifest with an external simulator.
+Use a fresh output directory for each launch; existing recordings are not overwritten.
+Recording errors stop execution when provenance is enabled.
 
 ### Rosbag Recording
 

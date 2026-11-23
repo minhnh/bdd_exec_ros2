@@ -8,11 +8,14 @@ launch:
       name: "config"
       default: "$(find-pkg-share bdd_exec_ros2)/config/mockup_configs.yaml"
   - arg:
+      name: "simulator"
+      default: "mock"
+      choice:
+        - value: "mock"
+        - value: "external"
+  - arg:
       name: "graph_models"
       default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-robbdd-json.yaml"
-  - arg:
-      name: "scene_setup_mode"
-      default: "none"
   - arg:
       name: "simulation_service_namespace"
       default: "/"
@@ -22,6 +25,27 @@ launch:
   - arg:
       name: "simulate_collision"
       default: "false"
+  - arg:
+      name: "use_sim_time"
+      default: "false"
+  - arg:
+      name: "prov_format"
+      default: "json-ld"
+  - arg:
+      name: "prov_output_dir"
+      default: ""
+  - arg:
+      name: "record_bag"
+      default: "false"
+  - node:
+      pkg: "bdd_exec_ros2"
+      exec: "mockup_simulation_node"
+      namespace: "$(var simulation_service_namespace)"
+      name: "mockup_simulation"
+      if: "$(eval \"'$(var simulator)' == 'mock'\")"
+  - executable:
+      cmd: "ros2 topic pub --rate 100 --print 0 /clock rosgraph_msgs/msg/Clock '{clock: now}'"
+      if: "$(eval \"'$(var simulator)' == 'mock' and '$(var use_sim_time)'.lower() == 'true'\")"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
@@ -29,10 +53,18 @@ launch:
       name: "test_coordinator"
       param:
         - from: "$(var config)"
+        - name: "use_sim_time"
+          value: "$(var use_sim_time)"
+        - name: "record_bag"
+          value: "$(var record_bag)"
+        - name: "prov_format"
+          value: "$(var prov_format)"
+        - name: "prov_output_dir"
+          value: "$(var prov_output_dir)"
         - name: "graph_models"
           value: "$(var graph_models)"
         - name: "scene_setup_mode"
-          value: "$(var scene_setup_mode)"
+          value: "simulation"
         - name: "simulation_service_namespace"
           value: "$(var simulation_service_namespace)"
         - name: "world_entity_name"
@@ -44,5 +76,7 @@ launch:
       name: "mockup_behaviour"
       param:
         - from: "$(var config)"
+        - name: "use_sim_time"
+          value: "$(var use_sim_time)"
         - name: "simulate_collision"
           value: "$(var simulate_collision)"

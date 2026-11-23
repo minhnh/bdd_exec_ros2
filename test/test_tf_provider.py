@@ -7,6 +7,7 @@ from bdd_dsl.models.urirefs import (
     URI_BDD_TYPE_STRING_ENTITY_MAPPING,
 )
 from geometry_msgs.msg import TransformStamped
+from rclpy.clock import ClockType
 from rclpy.time import Time
 from rdf_utils.models.vocab import (
     URI_OBS_PRED_ENTITY_MAPPER,
@@ -85,7 +86,9 @@ def test_provider_omits_stale_transform():
     provider._logger = Mock()
     provider._max_age_sec = 1.0
     provider._node = Mock()
-    provider._node.get_clock.return_value.now.return_value = Time(seconds=10.0)
+    provider._node.get_clock.return_value.now.return_value = Time(
+        seconds=10.0, clock_type=ClockType.ROS_TIME
+    )
 
     poses = provider.get_poses("base_link", ["drawer_handle"])
 
