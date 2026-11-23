@@ -79,7 +79,9 @@ def test_package_metadata_is_recorded_once_in_the_shared_loading_bundle(tmp_path
             "bdd_exec_ros2.prov.load_ros_pkg_prov", wraps=load_ros_pkg_prov
         ) as ros_lookup,
     ):
-        load_graph_models_in_yaml(str(manifest), model_g, session.prov_bundle)
+        load_graph_models_in_yaml(
+            str(manifest), model_g, prov_bundle=session.prov_bundle
+        )
         assert session.dataset is dataset
         assert model_g.store is dataset.store
         model_g.add((URIRef("urn:added-after-session"), RDF.type, PROV.Entity))

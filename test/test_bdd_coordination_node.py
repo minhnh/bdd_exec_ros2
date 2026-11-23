@@ -1026,7 +1026,7 @@ def test_model_loading_records_sources_transformation_and_execution_use(tmp_path
         tmp_path, get_py_pkg_info("bdd_exec_ros2").purl, use_sim_time=False
     )
     provenance, model_g = session.prov_bundle, session.model_graph
-    load_graph_models_in_yaml(str(manifest), model_g, session.prov_bundle)
+    load_graph_models_in_yaml(str(manifest), model_g, prov_bundle=session.prov_bundle)
     model = model_g
     (activity,) = provenance.objects(model.identifier, PROV.wasGeneratedBy)
     assert (activity, RDF.type, URI_PROV_EXT_TYPE_TRANSFORMATION) in provenance
@@ -1196,3 +1196,39 @@ def test_bag_start_failure_prevents_behavior_and_closes_evidence():
     node._action_client.send_goal_async.assert_not_called()
     node._remove_context_topic_reg.assert_called_once_with(context_id)
     node._close_recording.assert_called_once_with(context_id, "bag_start_failed")
+
+
+def test_model_loading_captures_direct_and_context_urls(tmp_path, monkeypatch):
+    import urllib.request
+
+    import yaml
+    from rdf_utils.resolver import IriToFileResolver
+    from rdflib.namespace import PROV
+
+    from bdd_exec_ros2.executables.bdd_coordination_node import (
+        load_graph_models_in_yaml,
+    )
+
+    uri = "https://example.org/model.json"
+    context_uri = "https://example.org/context.json"
+    (tmp_path / "context.json").write_text('{"@context": {"kind": "@type"}}')
+    (tmp_path / "model.json").write_text(
+        '{"@context": "' + context_uri + '", "@id": "urn:subject", "kind": "urn:Type"}'
+    )
+    manifest = tmp_path / "models.yaml"
+    manifest.write_text(yaml.safe_dump([{"path": uri, "format": "json-ld"}]))
+    resolver = IriToFileResolver({"https://example.org/": tmp_path})
+    monkeypatch.setattr(urllib.request, "_opener", resolver)
+    model = Graph(identifier=URIRef(uuid4().urn))
+    provenance = Graph()
+    load_graph_models_in_yaml(
+        str(manifest), model, prov_bundle=provenance, resolver=resolver
+    )
+    assert (URIRef("urn:subject"), RDF.type, URIRef("urn:Type")) in model
+    loading = provenance.value(model.identifier, PROV.wasGeneratedBy)
+    for source_uri in (uri, context_uri):
+        remote = provenance.value(predicate=PROV.atLocation, object=URIRef(source_uri))
+        assert remote is not None
+        local = provenance.value(predicate=PROV.alternateOf, object=remote)
+        assert local is not None
+        assert (loading, PROV.used, local) in provenance

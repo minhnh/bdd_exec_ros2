@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.request import OpenerDirector
 from uuid import UUID, uuid4
 
 import rclpy
@@ -66,7 +67,9 @@ from rdf_utils import DatasetFormat
 from rdf_utils.models.common import ModelBase
 from rdf_utils.models.prov import (
     add_entity,
+    add_resolver_prov,
     capture_file_prov,
+    capture_resolved_source_prov,
     get_py_pkg_info,
     get_ros_pkg_info,
     load_py_pkg_prov,
@@ -126,7 +129,11 @@ def _is_context_id_uninitialized(context_id: UUIDMsg) -> bool:
 
 
 def load_graph_models_in_yaml(
-    models_yml: str, model_g: Graph, prov_bundle: Graph | None = None
+    models_yml: str,
+    model_g: Graph,
+    *,
+    prov_bundle: Graph | None = None,
+    resolver: OpenerDirector | None = None,
 ) -> None:
     """Load models and optionally record their source files and transformation.
 
@@ -158,7 +165,8 @@ def load_graph_models_in_yaml(
     with open(yml_p) as yml_f:
         models_list = yaml.safe_load(yml_f)
 
-    install_resolver()
+    if resolver is None:
+        resolver = install_resolver()
 
     assert isinstance(model_g.identifier, URIRef)
     for model_info in models_list:
@@ -209,12 +217,18 @@ def load_graph_models_in_yaml(
                 )
             tool = "robbdd"
         else:
+            model_g.parse(path, format=model_info["format"])
             if prov_bundle is not None:
                 inputs = {
-                    capture_file_prov(prov_bundle, path, roots=roots, captured=captured)
+                    capture_resolved_source_prov(
+                        prov_bundle,
+                        path,
+                        resolver=resolver,
+                        roots=roots,
+                        captured=captured,
+                    )
                 }
                 sources.update(inputs)
-            model_g.parse(path, format=model_info["format"])
             tool = "rdflib"
 
         if prov_bundle is not None:
@@ -237,13 +251,16 @@ def load_graph_models_in_yaml(
         prov_bundle.add((collection_id, RDF.type, PROV.Collection))
         for source in sources:
             prov_bundle.add((collection_id, PROV.hadMember, source))
-        load_transformation_prov(
+        loading_id = load_transformation_prov(
             prov_bundle,
             {collection_id, *contributions},
             {model_g.identifier},
             packages["bdd_exec_ros2"],
             started=started_at,
             ended=datetime.now(UTC),
+        )
+        add_resolver_prov(
+            prov_bundle, resolver, loading_id, roots=roots, captured=captured
         )
 
 
@@ -427,7 +444,7 @@ class BddCoordNode(Node):
             self._recording_session = None
             self.graph = Graph(identifier=URIRef(uuid4().urn))
             prov_bundle = None
-        load_graph_models_in_yaml(g_models_yml, self.graph, prov_bundle)
+        load_graph_models_in_yaml(g_models_yml, self.graph, prov_bundle=prov_bundle)
 
         self._recorders: dict[UUID, RosScenarioExecRecorder] = {}
         self._tf_provider = (

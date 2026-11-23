@@ -22,7 +22,7 @@ import pytest
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Pose
 from rdf_utils.models.common import ModelBase
-from rdf_utils.models.prov import add_file_entity, get_file_path
+from rdf_utils.models.prov import add_file_entity, resolve_location
 from rdflib import Graph, URIRef
 from rdflib.namespace import DCTERMS
 from scene_dsl.langs import scenex_metamodel
@@ -239,15 +239,17 @@ def test_create_spawn_entity_entries_converts_executable_scene_objects():
         world_entity_name="world",
     )
     assert {element_id for element_id, _ in entries} == set(scene.object_models)
+    assert any(
+        message.entity_resource.uri.startswith("https://") for _, message in entries
+    )
     assert all(
         message.initial_pose.header.frame_id == "world" for _, message in entries
     )
     for element_id, message in entries:
         [resource] = scene.object_models[element_id].values()
         source = interface._model_graph.value(resource.id, DCTERMS.source)
-        assert (
-            message.entity_resource.uri
-            == get_file_path(interface._model_graph, source).as_uri()
+        assert message.entity_resource.uri == str(
+            resolve_location(interface._model_graph, source)
         )
 
 

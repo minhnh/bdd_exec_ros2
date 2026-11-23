@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable, Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Final
 from uuid import UUID
 
@@ -50,7 +50,10 @@ from bdd_ros2_interfaces.msg import (
 from builtin_interfaces.msg import Time as TimeMsg
 from rclpy.time import Time
 from rdf_utils.models.geom_coord import get_transform_between_frames
-from rdf_utils.models.prov import get_linked_file_path
+from rdf_utils.models.prov import (
+    capture_resolved_source_prov,
+    resolve_location,
+)
 from rdf_utils.naming import get_valid_var_name
 from rdflib import Graph, URIRef
 from rdflib.namespace import DCTERMS
@@ -117,6 +120,7 @@ def create_spawn_entity_entries(
 
     rng = np.random.default_rng()
     entries = []
+    roots, captured = {}, {}
     element_ids = (
         scene_inst.scene_model.objects
         | scene_inst.scene_model.agents
@@ -158,10 +162,18 @@ def create_spawn_entity_entries(
                 )
             continue
 
-        resource_path = get_linked_file_path(graph, resource.id, DCTERMS.source)
-        if resource_path is None:
+        source = graph.value(resource.id, DCTERMS.source)
+        if source is None:
             raise ValueError(f"Model '{resource.id}' has no located source file")
-        resource_uri = resource_path.as_uri()
+        resource_uri = str(resolve_location(graph, source))
+        if record_prov:
+            assert sample_graph is not None
+            capture_resolved_source_prov(
+                sample_graph,
+                resource_uri,
+                roots=roots,
+                captured=captured,
+            )
 
         entries.append(
             (
@@ -197,7 +209,7 @@ def format_time_msg(
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{fraction}"
 
-    return datetime.fromtimestamp(msg.sec, tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(msg.sec, tz=UTC).strftime(
         format_str.replace("%f", fraction)
     )
 
