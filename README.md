@@ -132,6 +132,12 @@ To test simulator entity-state observations, explicitly set `graph_models` to th
 Use a fresh output directory for each launch; existing recordings are not overwritten.
 Recording errors stop execution when provenance is enabled.
 
+Scene setup accepts optional `sample_g` and `prov_g` graphs. Sampled values use
+`sample_g` when supplied, otherwise `prov_g`. Providing `prov_g` enables sampling
+activities in that same sampling destination and asset provenance in `prov_g`.
+No graph contents are copied. Each recorded execution captures its base-world file
+hash, including when the world is reused through reset.
+
 ### Rosbag Recording
 
 [`record_execution.py`](./bdd_exec_ros2/executables/record_execution.py) records the configured topic set,

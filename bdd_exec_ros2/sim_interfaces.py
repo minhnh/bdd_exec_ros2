@@ -23,10 +23,10 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.client import Client
 from rclpy.impl.rcutils_logger import RcutilsLogger
 from rclpy.node import Node
-from rdf_utils.models.prov import get_linked_file_path
+from rdf_utils.models.prov import capture_resolved_source_prov, get_linked_file_path
 from rdf_utils.naming import get_valid_var_name
 from rdflib import Graph, URIRef
-from rdflib.namespace import DCTERMS
+from rdflib.namespace import DCTERMS, PROV
 from scene_dsl.rdf.scenex import URI_MJCF_MUJOCO, URI_URDF_ROBOT, URI_USD_STAGE
 from scene_dsl.rdf_parser.scenex import (
     SceneInstanceModel,
@@ -455,7 +455,7 @@ class SimInterface:
             )
 
         resource = resources[0]
-        path = get_linked_file_path(self._model_graph, resource.id, DCTERMS.source)
+        _, path = get_linked_file_path(self._model_graph, resource.id, DCTERMS.source)
         if path is None:
             raise ValueError(f"Model '{resource.id}' has no located source file")
 
@@ -634,8 +634,8 @@ class SimInterface:
         scene_inst: SceneInstanceModel,
         *,
         additional_elements: set[URIRef] | None = None,
-        sample_graph: Graph | None = None,
-        record_prov: bool = False,
+        sample_g: Graph | None = None,
+        prov_g: Graph | None = None,
     ) -> dict[URIRef, str]:
         """Load or reset a scene, spawn selected elements, then start simulation."""
         if self._model_graph is None:
@@ -649,9 +649,29 @@ class SimInterface:
             world_entity_name=self.world_entity_name,
             additional_elements=additional_elements,
             warn=self._logger.warning,
-            sample_graph=sample_graph,
-            record_prov=record_prov,
+            sample_g=sample_g,
+            prov_g=prov_g,
         )
+        if prov_g is not None:
+            roots, captured = {}, {}
+            for resource in scene_inst.models.values():
+                if not resource.types & _require_supported_resource_types(features):
+                    continue
+                file_entity, path = get_linked_file_path(
+                    self._model_graph, resource.id, DCTERMS.source
+                )
+                if file_entity is None:
+                    raise ValueError(f"Model '{resource.id}' has no source file entity")
+                if path is None:
+                    raise ValueError(
+                        f"Source file entity '{file_entity}' for model '{resource.id}' has no location"
+                    )
+
+                captured_entity = capture_resolved_source_prov(
+                    prov_g, path, roots=roots, captured=captured
+                )
+                if captured_entity != file_entity:
+                    prov_g.add((captured_entity, PROV.alternateOf, file_entity))
         if self._active_scene_inst_id == scene_inst.id:
             await self.reset_simulation()
         else:

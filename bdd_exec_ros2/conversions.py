@@ -103,10 +103,14 @@ def create_spawn_entity_entries(
     world_entity_name: str = "world",
     additional_elements: set[URIRef] | None = None,
     warn: Callable[[str], object] | None = None,
-    sample_graph: Graph | None = None,
-    record_prov: bool = False,
+    sample_g: Graph | None = None,
+    prov_g: Graph | None = None,
 ) -> list[tuple[URIRef, SpawnEntityMsg]]:
-    """Create spawn messages and retain their source scene element IDs."""
+    """Create spawn messages and retain their source scene element IDs.
+
+    Samples and optional sampling activities use sample_g, falling back to prov_g.
+    Asset provenance uses prov_g. Graph contents are never copied between destinations.
+    """
     if not resource_types:
         raise ValueError("resource_types must not be empty")
 
@@ -152,8 +156,8 @@ def create_spawn_entity_entries(
             world_body.root_frame.id,
             graph,
             rng=rng,
-            sample_graph=sample_graph,
-            record_prov=record_prov,
+            sample_graph=sample_g if sample_g is not None else prov_g,
+            record_prov=prov_g is not None,
         )
         if transform is None:
             if warn is not None:
@@ -166,10 +170,9 @@ def create_spawn_entity_entries(
         if source is None:
             raise ValueError(f"Model '{resource.id}' has no located source file")
         resource_uri = str(resolve_location(graph, source))
-        if record_prov:
-            assert sample_graph is not None
+        if prov_g is not None:
             capture_resolved_source_prov(
-                sample_graph,
+                prov_g,
                 resource_uri,
                 roots=roots,
                 captured=captured,

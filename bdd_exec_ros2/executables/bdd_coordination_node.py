@@ -1076,11 +1076,9 @@ class BddCoordNode(Node):
 
                 recorder = self._recorders.get(context.context_id)
                 if recorder is None:
-                    sample_graph = None
-                    enable_prov = False
+                    sample_g = None
                 else:
-                    sample_graph = recorder.graph
-                    enable_prov = True
+                    sample_g = recorder.graph
                 try:
                     if self._use_sim_time:
                         assert self._sim_clock is not None
@@ -1088,8 +1086,8 @@ class BddCoordNode(Node):
                     await self._sim_interface.setup_scene(
                         context.scene_inst,
                         additional_elements=additional_elements,
-                        sample_graph=sample_graph,
-                        record_prov=enable_prov,
+                        sample_g=sample_g,
+                        prov_g=sample_g,
                     )
                     if self._use_sim_time:
                         assert self._sim_clock is not None
