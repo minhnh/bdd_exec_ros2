@@ -269,9 +269,9 @@ def test_scene_setup_failure_cleans_up_and_continues():
         (started_context.scene_inst,),
     ]
     for setup in setup_calls:
-        assert setup.kwargs["sample_graph"] is None
+        assert setup.kwargs["sample_g"] is None
         assert setup.kwargs["additional_elements"] == {additional}
-        assert setup.kwargs["record_prov"] is False
+        assert setup.kwargs["prov_g"] is None
     node._remove_context_topic_reg.assert_called_once_with(failed_context.context_id)
     node._start_scenario_variant.assert_called_once_with(
         started_context, started_variation

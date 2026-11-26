@@ -661,7 +661,7 @@ def test_setup_scene_loads_then_resets_same_instance(simulator):
     _attach_simulator(interface, simulator)
     samples = Graph()
 
-    first = asyncio.run(interface.setup_scene(scene, sample_graph=samples))
+    first = asyncio.run(interface.setup_scene(scene, sample_g=samples))
     assert set(first) == set(scene.object_models)
     assert set(first.values()) == set(simulator.entities)
     assert simulator.state == SimulationState.STATE_PLAYING
@@ -671,7 +671,7 @@ def test_setup_scene_loads_then_resets_same_instance(simulator):
     for name, request in simulator.entities.items():
         assert name == request.name
 
-    second = asyncio.run(interface.setup_scene(scene, sample_graph=samples))
+    second = asyncio.run(interface.setup_scene(scene, sample_g=samples))
     assert second == first
     assert len(interface._load_world_srv_client.requests) == 1
     assert len(interface._reset_simulation_srv_client.requests) == 1
@@ -822,8 +822,8 @@ def test_spawn_conversion_preserves_values_with_sampling_provenance():
                     scene,
                     graph,
                     {SUPPORTED_FORMAT_URIS["usd"]},
-                    sample_graph=samples,
-                    record_prov=record_prov,
+                    sample_g=samples,
+                    prov_g=samples if record_prov else None,
                 )
             )
 
@@ -837,3 +837,105 @@ def test_spawn_conversion_preserves_values_with_sampling_provenance():
     assert set(graph) == before
     activities = set(samples.subjects(RDF.type, URI_PROV_EXT_TYPE_GENERALIZATION))
     assert activities
+
+
+def test_setup_records_world_hash_for_load_and_reset(tmp_path):
+    from rdflib.namespace import PROV
+
+    interface, scene = _spawn_interface(
+        SimpleNamespace(features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"])
+    )
+    world = next(iter(scene.models))
+    path = tmp_path / "world.usd"
+    path.write_bytes(b"first world")
+    source = add_file_entity(interface._model_graph, None, path)
+    interface._model_graph.set((world, DCTERMS.source, source))
+    before = set(interface._model_graph)
+    interface.load_world = AsyncMock(return_value=path)
+    interface.reset_simulation = AsyncMock()
+    interface._send_spawn_entries = AsyncMock(return_value={})
+    interface.set_sim_state = AsyncMock()
+    hashes = []
+    for contents in (b"first world", b"changed world"):
+        path.write_bytes(contents)
+        provenance = Graph()
+        asyncio.run(interface.setup_scene(scene, sample_g=Graph(), prov_g=provenance))
+        captured = next(provenance.subjects(PROV.alternateOf, source), source)
+        hashes.append(provenance.value(captured, DCTERMS.identifier))
+        assert str(hashes[-1]).startswith("ni:///sha-256;")
+    assert hashes[0] != hashes[1]
+    interface.load_world.assert_awaited_once_with(scene)
+    interface.reset_simulation.assert_awaited_once()
+    assert set(interface._model_graph) == before
+    with patch("bdd_exec_ros2.sim_interfaces.capture_resolved_source_prov") as capture:
+        asyncio.run(interface.setup_scene(scene))
+        capture.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "mode", ["none", "samples", "provenance", "separate", "shared"]
+)
+def test_spawn_sampling_selects_one_destination(mode):
+    from rdf_utils.models.vocab import URI_PROV_EXT_TYPE_GENERALIZATION
+    from rdflib import RDF
+
+    interface, scene = _spawn_interface(
+        SimpleNamespace(features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"])
+    )
+    samples, provenance = Graph(), Graph()
+    sample_g = samples if mode in ("samples", "separate", "shared") else None
+    prov_g = (
+        samples
+        if mode == "shared"
+        else (provenance if mode in ("provenance", "separate") else None)
+    )
+
+    def entries():
+        return dict(
+            create_spawn_entity_entries(
+                scene,
+                interface._model_graph,
+                {SUPPORTED_FORMAT_URIS["usd"]},
+                sample_g=sample_g,
+                prov_g=prov_g,
+            )
+        )
+
+    first = entries()
+    destination = sample_g if sample_g is not None else prov_g
+    if destination is not None:
+        assert len(destination)
+        before = set(destination)
+        with patch(
+            "rdf_utils.models.geom_coord.sample_from_distrib",
+            side_effect=AssertionError("cached samples must not be redrawn"),
+        ):
+            assert entries().keys() == first.keys()
+        assert set(destination) == before
+        activities = list(
+            destination.subjects(RDF.type, URI_PROV_EXT_TYPE_GENERALIZATION)
+        )
+        assert bool(activities) == (prov_g is not None)
+    if mode == "separate":
+        assert not list(provenance.subjects(RDF.type, URI_PROV_EXT_TYPE_GENERALIZATION))
+        assert not set(samples) & set(provenance)
+    if mode == "none":
+        assert not len(samples) and not len(provenance)
+
+
+@pytest.mark.parametrize(
+    "missing, message",
+    [("source", "has no source file entity"), ("location", "has no location")],
+)
+def test_setup_reports_missing_world_source_metadata(missing, message):
+    interface, scene = _spawn_interface(
+        SimpleNamespace(features=[SimulatorFeatures.SPAWNING], spawn_formats=["usd"])
+    )
+    world = next(iter(scene.models))
+    interface._model_graph.remove((world, DCTERMS.source, None))
+    if missing == "location":
+        interface._model_graph.add(
+            (world, DCTERMS.source, URIRef("urn:test:world-file"))
+        )
+    with pytest.raises(ValueError, match=message):
+        asyncio.run(interface.setup_scene(scene, prov_g=Graph()))
